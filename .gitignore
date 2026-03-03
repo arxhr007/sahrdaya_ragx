@@ -1,0 +1,27 @@
+# Index cache (generated on first run)
+.index_cache/
+
+# Faculty database (generated from data.txt)
+faculty.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Debug/test scripts
+_debug*.py
+_test*.py
+
+# OS
+Thumbs.db
+.DS_Store
