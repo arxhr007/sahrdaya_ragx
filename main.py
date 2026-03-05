@@ -2,6 +2,7 @@ from rag_setup import (
     qa_chain_with_context, chat_history,
     retrieve_with_metadata, expand_query,
     classify_and_generate_sql, execute_faculty_sql, format_sql_results,
+    validate_faculty_sql,
 )
 import re
 import time
@@ -276,42 +277,54 @@ while True:
     sql_query = classify_and_generate_sql(user_input, history_text)
 
     if sql_query:
+        # Validate that SQL references only existing columns
+        if not validate_faculty_sql(sql_query):
+            print("  [SQL fallback] Invalid columns in query, using RAG...\n  ", end="")
+            sql_query = None  # force RAG path
+
+    if sql_query:
         sql_result = execute_faculty_sql(sql_query)
         if sql_result:
             columns, rows = sql_result
-            response = format_sql_results(columns, rows, user_input)
-            t_end = time.time()
-            print(response)
-            print(f"\n  [SQL] {sql_query}")
-
-            chat_history.append(user_input)
-            # Store a compact summary in history instead of the full table
-            # to prevent token overflow on subsequent LLM calls.
-            if len(rows) > 5:
-                summary = f"[SQL result: {len(rows)} rows from faculty database for query: {sql_query}]"
+            # If SQL returned 0 rows, fall back to RAG instead of showing empty result
+            if not rows:
+                print("  [SQL fallback] No results, using RAG...\n  ", end="")
+                sql_query = None  # force RAG path below
             else:
-                summary = response
-            chat_history.append(summary)
-            h_text = build_history_text()
-            stat = {
-                "response_time": t_end - t_start,
-                "prompt_tokens": estimate_tokens(user_input),
-                "response_tokens": estimate_tokens(response),
-                "history_tokens": estimate_tokens(h_text),
-                "context_tokens": 0,
-                "total_kb": len((user_input + response + h_text).encode("utf-8")) / 1024,
-                "chunk_ids": [],
-                "num_docs": 0,
-                "turn": len(chat_history) // 2,
-                "query": user_input,
-                "sql": sql_query,
-            }
-            session_stats.append(stat)
-            print(format_stats_box(stat))
-            print()
-            continue
-        # SQL generated but execution failed — fall through to RAG
-        print("  [SQL fallback] Query failed, using RAG...\n  ", end="")
+                response = format_sql_results(columns, rows, user_input)
+                t_end = time.time()
+                print(response)
+                print(f"\n  [SQL] {sql_query}")
+
+                chat_history.append(user_input)
+                # Store a compact summary in history instead of the full table
+                # to prevent token overflow on subsequent LLM calls.
+                if len(rows) > 5:
+                    summary = f"[SQL result: {len(rows)} rows from faculty database for query: {sql_query}]"
+                else:
+                    summary = response
+                chat_history.append(summary)
+                h_text = build_history_text()
+                stat = {
+                    "response_time": t_end - t_start,
+                    "prompt_tokens": estimate_tokens(user_input),
+                    "response_tokens": estimate_tokens(response),
+                    "history_tokens": estimate_tokens(h_text),
+                    "context_tokens": 0,
+                    "total_kb": len((user_input + response + h_text).encode("utf-8")) / 1024,
+                    "chunk_ids": [],
+                    "num_docs": 0,
+                    "turn": len(chat_history) // 2,
+                    "query": user_input,
+                    "sql": sql_query,
+                }
+                session_stats.append(stat)
+                print(format_stats_box(stat))
+                print()
+                continue
+        elif sql_result is None:
+            # SQL generated but execution failed — fall through to RAG
+            print("  [SQL fallback] Query failed, using RAG...\n  ", end="")
 
     # ── Step 2: Regular RAG query with chunk tracking ──────────────────────────
     context_str, chunk_ids, num_docs = retrieve_with_metadata(user_input)

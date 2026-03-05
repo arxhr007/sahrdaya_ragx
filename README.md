@@ -35,8 +35,12 @@ flowchart TD
         E -->|"NLTK sentence<br/>tokenizer"| F["✂️ Sentence<br/>Splitter"]
         F -->|"regex +<br/>pattern match"| G["🏷️ Category<br/>Tagger"]
         G -->|"alias<br/>injection"| H["📦 data_cleaned.jsonl<br/>18 categories"]
+        E -->|"role-label<br/>parsing"| FP["👥 Former People<br/>Structurer"]
+        FP -->|"10 role chunks<br/>+ summary"| H
         E -->|"regex<br/>parsing"| I["👤 Faculty<br/>Extractor"]
+        E -->|"former people<br/>parsing"| IP["👥 Former People<br/>Parser"]
         I -->|"110 profiles<br/>16 columns"| K["🗃️ SQLite DB<br/>faculty.db"]
+        IP -->|"52 records<br/>10 roles"| K
     end
 
     subgraph INDEX["📊 Dual Index Layer"]
@@ -54,7 +58,7 @@ flowchart TD
         S --> T{"🧠 LLM<br/>Classifier"}
 
         subgraph SQL["📊 SQL Path"]
-            T -->|"bulk /<br/>aggregate"| U["🔧 Schema-Aware<br/>SQL Generator"]
+            T -->|"bulk / aggregate /<br/>former people"| U["🔧 Schema-Aware<br/>SQL Generator"]
             K --> U
             U -->|"SELECT only<br/>safety filter"| V["⚡ SQLite<br/>Executor"]
             V --> W["📋 Markdown<br/>Table"]
@@ -97,7 +101,7 @@ flowchart TD
 |---|---|
 | `scraper.py` | Multi-threaded web scraper (Playwright + Sitemap, thread-safe, 4 output formats) |
 | `data.txt` | Raw scraped chunks (TSV: `chunk_id\tcontent`) |
-| `preprocess_data.py` | Cleans, categorises (18 categories), sentence-splits, and injects search aliases |
+| `preprocess_data.py` | Cleans, categorises (18 categories), sentence-splits, injects search aliases, and structures former people data |
 | `data_cleaned.jsonl` | Optimised chunks ready for indexing |
 | `faculty_db.py` | Parses faculty profiles from raw data, builds SQLite database (110 records, 16 columns) |
 | `faculty.db` | SQLite faculty database (auto-generated) |
@@ -169,14 +173,14 @@ copy sahrdaya_rag.txt data.txt
 python preprocess_data.py
 ```
 
-Reads `data.txt`, cleans text, detects categories, splits into sentence-aware chunks, injects search aliases, and writes `data_cleaned.jsonl`.
+Reads `data.txt`, cleans text, detects categories, splits into sentence-aware chunks, injects search aliases, structures former people data into per-role chunks, and writes `data_cleaned.jsonl`.
 
 Sample output:
 ```
 [1/4] Loaded 785 raw chunks from data.txt
-[2/4] Cleaned text — kept 733 chunks, skipped 52 near-empty
-[3/4] Categorised & re-chunked — 2191 final chunks (466 large chunks were split)
-[4/4] Wrote 2191 chunks to data_cleaned.jsonl
+[2/4] Cleaned text — kept 784 chunks, skipped 1 near-empty
+[3/4] Categorised & re-chunked — 2198 final chunks (466 large chunks were split)
+[4/4] Wrote 2198 chunks to data_cleaned.jsonl
 ```
 
 ### Step 3 — Run the chatbot
@@ -232,6 +236,7 @@ ragx-backend/
 | LLM | Groq `openai/gpt-oss-120b` | `rag_setup.py` | Requires Groq API key |
 | Embeddings | `all-MiniLM-L6-v2` (384-dim) | `rag_setup.py` | Runs locally, no API key |
 | Chunk size | 700 chars target, 910 split threshold | `preprocess_data.py` | Sentence-aware splitting |
+| Former people | 10 role-based chunks + 1 summary | `preprocess_data.py` | Structured per-role parsing for accurate retrieval |
 | BM25:Vector weights | 0.6:0.4 | `rag_setup.py` | BM25 weighted higher for keyword queries |
 | Max context | 22,000 chars (~6K tokens) | `rag_setup.py` | Truncates retrieved chunks to fit |
 | SQL history limit | 1,500 chars | `rag_setup.py` | Caps history sent to SQL classifier |

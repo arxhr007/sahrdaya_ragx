@@ -256,6 +256,140 @@ INPUT_FILE  = "data.txt"
 OUTPUT_FILE = "data_cleaned.jsonl"
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4b.  FORMER PEOPLE — STRUCTURED ROLE-BASED SPLITTING
+# ═══════════════════════════════════════════════════════════════════════════════
+# The raw "Former People" chunk is one long flat string where role labels
+# (Chairman, Manager, Executive Director, etc.) are mixed inline with names
+# and dates.  The generic sentence-based splitter cannot preserve role
+# boundaries, so queries like "list all former Managers" return incomplete
+# or incorrect results.
+#
+# This handler:
+#   1. Detects the "Former People" chunk.
+#   2. Parses it into per-role sections using known role labels.
+#   3. Within each role, extracts individual (name, tenure) entries.
+#   4. Emits one sub-chunk per role, formatted as a clear list.
+
+_FORMER_ROLE_LABELS = [
+    "Chairman",
+    "Manager",
+    "Executive Director",
+    "Finance Officer",
+    "Advisor",
+    "Director",
+    "Principal",
+    "Vice Principal",
+    "Media Director",
+    "College Chairpersons",
+]
+
+# Build a regex that splits on role labels appearing in the text.
+# We match the role label only when it is NOT preceded by "Executive" or "Vice"
+# or "Media" (to avoid partial matches like "Director" eating "Executive Director").
+# Strategy: match the longest role labels first.
+_FORMER_ROLES_SORTED = sorted(_FORMER_ROLE_LABELS, key=len, reverse=True)
+_FORMER_ROLE_PATTERN = re.compile(
+    r"(?<!\w)(" + "|".join(re.escape(r) for r in _FORMER_ROLES_SORTED) + r")(?=\s)",
+)
+
+# Pattern: name followed by year range (YYYY - YYYY)
+_PERSON_ENTRY = re.compile(
+    r"(.+?)\s+(\d{4})\s*-\s*(\d{4})"
+)
+
+
+def _parse_former_people(text: str) -> list[dict] | None:
+    """Parse the 'Former People' flat text into per-role structured chunks.
+    Returns a list of dicts ready for data_cleaned.jsonl, or None if not applicable."""
+
+    if "Former People" not in text:
+        return None
+
+    # Strip the intro header
+    body = re.sub(
+        r"^Former People\s+Distinguished alumni and former faculty members\s*",
+        "", text, flags=re.IGNORECASE
+    ).strip()
+
+    # Split text by role labels
+    # Find all role label positions
+    matches = list(_FORMER_ROLE_PATTERN.finditer(body))
+    if not matches:
+        return None
+
+    role_sections: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        role_label = m.group(1)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        section_text = body[start:end].strip()
+        role_sections.append((role_label, section_text))
+
+    # Build structured chunks
+    result = []
+    categories = ["faculty", "governance", "about"]
+
+    for role_label, section_text in role_sections:
+        entries = _PERSON_ENTRY.findall(section_text)
+        if not entries:
+            continue
+
+        lines = [f"Former {role_label} of Sahrdaya College of Engineering & Technology (SCET):"]
+        for name, year_from, year_to in entries:
+            # Clean name: remove leading/trailing whitespace and dots
+            name = name.strip().strip(".")
+            if name:
+                lines.append(f"  - {name} ({year_from} - {year_to})")
+
+        chunk_content = "\n".join(lines)
+
+        # Add search aliases for names
+        aliases = []
+        for name, _, _ in entries:
+            name = name.strip().strip(".")
+            parts = name.split()
+            # Get last two significant name parts for alias
+            significant = [p for p in parts if len(p) > 2 and p not in
+                          ("Rev.", "Fr.", "Dr.", "Prof.", "Mr.", "Ms.", "Mrs.",
+                           "V.", "MR.", "MS.", "MRS.", "Sr.")]
+            if len(significant) >= 2:
+                concat = significant[-2] + significant[-1]
+                aliases.append(concat)
+                aliases.append(concat.lower())
+
+        if aliases:
+            chunk_content += "\n[search aliases: " + " | ".join(dict.fromkeys(aliases)) + "]"
+
+        cat_prefix = f"[{', '.join(categories)}] "
+        safe_label = role_label.lower().replace(" ", "_")
+        result.append({
+            "id": f"chunk_13_former_{safe_label}",
+            "parent_chunk": "chunk_13",
+            "categories": categories,
+            "content": cat_prefix + chunk_content,
+        })
+
+    # Also emit a summary chunk listing all roles
+    summary_lines = ["Former People — Sahrdaya College of Engineering & Technology (SCET)",
+                     "The following former leadership roles are documented:"]
+    for role_label, section_text in role_sections:
+        entries = _PERSON_ENTRY.findall(section_text)
+        count = len(entries)
+        summary_lines.append(f"  - Former {role_label}: {count} person(s)")
+    summary_lines.append("Ask about a specific role (e.g. 'list all former Principals') for details.")
+
+    cat_prefix = f"[{', '.join(categories)}] "
+    result.insert(0, {
+        "id": "chunk_13_former_summary",
+        "parent_chunk": "chunk_13",
+        "categories": categories,
+        "content": cat_prefix + "\n".join(summary_lines),
+    })
+
+    return result
+
+
 def main():
     if not os.path.exists(INPUT_FILE):
         print(f"[!] {INPUT_FILE} not found — nothing to process.")
@@ -277,6 +411,23 @@ def main():
             else:
                 raw_chunks.append(("unknown", line))
 
+    # ── Merge chunk_14 tail into chunk_13 (Former People continuation) ────
+    # chunk_14 contains the tail of College Chairpersons that was cut off
+    chunk_13_idx = None
+    chunk_14_idx = None
+    for i, (cid, _) in enumerate(raw_chunks):
+        if cid == "chunk_13":
+            chunk_13_idx = i
+        elif cid == "chunk_14":
+            chunk_14_idx = i
+    if chunk_13_idx is not None and chunk_14_idx is not None:
+        c13_id, c13_text = raw_chunks[chunk_13_idx]
+        c14_id, c14_text = raw_chunks[chunk_14_idx]
+        # chunk_14 starts with ". A 2007 - 2008" which is the tail of MR. ABILASH T
+        if c14_text.strip().startswith(". A "):
+            raw_chunks[chunk_13_idx] = (c13_id, c13_text + c14_text)
+            raw_chunks[chunk_14_idx] = (c14_id, "")  # empty it, will be skipped
+
     print(f"[1/4] Loaded {len(raw_chunks)} raw chunks from {INPUT_FILE}")
 
     # ── Clean ───────────────────────────────────────────────────────────────
@@ -296,6 +447,14 @@ def main():
     rechunked_count = 0
 
     for cid, text in cleaned:
+        # ── Special handling for "Former People" chunk ──────────────────────
+        if cid == "chunk_13" and "Former People" in text:
+            structured = _parse_former_people(text)
+            if structured:
+                final_docs.extend(structured)
+                rechunked_count += 1
+                continue
+
         categories = detect_categories(text)
         cat_prefix = f"[{', '.join(categories)}] "
 

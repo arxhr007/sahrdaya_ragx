@@ -26,7 +26,7 @@ flowchart LR
     C -->|rag_setup.py| D[🔍 BM25 Index]
     C -->|rag_setup.py| E[🧠 FAISS Vector Index]
     F[❓ User Query] --> G{🧠 LLM Classifier}
-    G -->|bulk faculty| H[📊 SQL Engine]
+    G -->|bulk faculty/former| H[📊 SQL Engine]
     I --> H
     G -->|general| J[⚡ Hybrid Retriever]
     D --> J
@@ -42,7 +42,7 @@ flowchart LR
 | Stage | What happens | File |
 |---|---|---|
 | 1. Scrape | Crawl the college website, extract text | `scraper.py` |
-| 2. Preprocess | Clean, categorise, chunk, inject aliases | `preprocess_data.py` |
+| 2. Preprocess | Clean, categorise, chunk, inject aliases, structure former people | `preprocess_data.py` |
 | 3. Faculty DB | Parse faculty profiles → SQLite database | `faculty_db.py` |
 | 4. Index | Build BM25 + FAISS search indexes | `rag_setup.py` |
 | 5. Route | LLM classifies query → SQL (bulk faculty) or RAG (everything else) | `rag_setup.py` |
@@ -118,12 +118,16 @@ Raw scraped text is noisy and unevenly sized. The preprocessor transforms it int
 flowchart TD
     A[data.txt - 785 raw chunks] --> B[ Text Cleaning]
     B --> C[ Category Detection]
-    C --> D{Chunk too large?}
+    C --> FP{Former People chunk?}
+    FP -->|Yes| FPS[ Role-Based Parsing]
+    FPS --> FPR["11 structured chunks<br/>10 roles + 1 summary"]
+    FPR --> H
+    FP -->|No| D{Chunk too large?}
     D -->|> 910 chars| E[ Sentence-Aware Splitting]
     D -->|≤ 910 chars| F[Keep as-is]
     E --> G[ Search Alias Injection per sub-chunk]
     F --> G
-    G --> H[data_cleaned.jsonl - 2191 optimised chunks]
+    G --> H[data_cleaned.jsonl - 2198 optimised chunks]
 ```
 
 ### 2.1 Text Cleaning
@@ -249,6 +253,52 @@ After aliases:   "Dr. Jis Paul Head of Department CSE\n[search aliases: JisPaul 
 | Mathew Geejo | `MathewGeejo mathewgeejo website team frontend developer` |
 
 Aliases are injected **per sub-chunk** — every piece gets its own relevant aliases based on what names appear in it.
+
+### 2.5 Former People — Structured Role-Based Splitting
+
+The "Former People" page lists all past leadership under role headings (Chairman, Manager, Executive Director, Finance Officer, Advisor, Director, Principal, Vice Principal, Media Director, College Chairpersons) — but in the raw scraped data it's one long flat string with roles and names mixed inline. The generic sentence splitter breaks this across chunk boundaries, making it impossible for the LLM to correctly list all people under a specific role.
+
+```
+❌ GENERIC SPLITTING (bad):
+  Chunk 1: "...Finance Officer Fr. Joseph Kizhakkumthala 2024 - 2025 Fr."
+  Chunk 2: "Jinto Verampilavu 2020 - 2024 Fr. Jinoj Kolenchery 2019 - 2020..."
+  → Role boundary broken — chunk 2 has no "Finance Officer" label
+  → Query "list all former Finance Officers" misses entries in chunk 2
+
+✅ STRUCTURED SPLITTING (good):
+  Chunk: "Former Finance Officer of SCET:
+    - Fr. Joseph Kizhakkumthala (2024 - 2025)
+    - Fr. Jinto Verampilavu (2020 - 2024)
+    - Fr. Jinoj Kolenchery (2019 - 2020)
+    - Fr. Thomas Velakkanadan (2013 - 2019)
+    - Rev. Fr. Jino Malakkaran (2010 - 2013)
+    - Rev. Fr. Dr. Antu Alappadan (2007 - 2010)"
+  → Complete, self-contained, with role label
+```
+
+The preprocessor detects the "Former People" chunk and:
+
+1. **Parses role sections** using known role labels as delimiters
+2. **Extracts (name, year_from, year_to)** tuples using regex within each section
+3. **Merges chunk_14 tail** into chunk_13 (College Chairpersons were split across raw chunks)
+4. **Emits one sub-chunk per role** with a clear header and structured list
+5. **Emits a summary chunk** listing all roles with person counts
+
+**Result: 11 structured chunks** replacing the 3 broken generic chunks:
+
+| Chunk ID | Content |
+|---|---|
+| `chunk_13_former_summary` | Overview: 10 roles, person counts |
+| `chunk_13_former_chairman` | 1 former Chairman |
+| `chunk_13_former_manager` | 6 former Managers |
+| `chunk_13_former_executive_director` | 6 former Executive Directors |
+| `chunk_13_former_finance_officer` | 6 former Finance Officers |
+| `chunk_13_former_advisor` | 2 former Advisors |
+| `chunk_13_former_director` | 4 former Directors |
+| `chunk_13_former_principal` | 4 former Principals |
+| `chunk_13_former_vice_principal` | 3 former Vice Principals |
+| `chunk_13_former_media_director` | 4 former Media Directors |
+| `chunk_13_former_college_chairpersons` | 16 former College Chairpersons |
 
 ---
 
@@ -588,6 +638,18 @@ Bulk faculty queries are handled by a **structured SQL pipeline** instead of RAG
 
 Single-person queries like "who is the HOD of CSE" or "tell me about Dr. Raju G" are **not** routed to SQL — they go through normal RAG for a natural-language answer.
 
+### Former People — SQL Table
+
+Former people (past Chairmen, Managers, Principals, Vice Principals, etc.) are stored in a dedicated `former_people` table in `faculty.db`. The LLM classifier routes "former" queries to SQL just like bulk faculty queries — no special regex bypass needed.
+
+```
+User: "list all former Principals"
+→ LLM generates: SELECT name, role, start_year, end_year FROM former_people WHERE role = 'Principal'
+→ SQL returns 4 rows: Dr. Nixon Kuruvila, Dr. Sudha George Valavi, Prof. K T Joseph, Dr. M S Jayadeva
+```
+
+The `former_people` table has 52 records across 10 roles (Chairman, Manager, Executive Director, Finance Officer, Advisor, Director, Principal, Vice Principal, Media Director, College Chairpersons). It is built by `faculty_db.py` by parsing the "Former People" section of `data.txt`.
+
 ### Why not use RAG for bulk faculty queries?
 
 **Problem 1: Multi-Constraint Filtering**
@@ -608,7 +670,7 @@ Even with enough context, LLMs are unreliable at extracting long structured list
 flowchart TD
     A["User: 'CSE faculty with PhD'"] --> B["Groq LLM: Classify + Generate SQL"]
     B --> C{SQL or NOT_SQL?}
-    C -->|SQL| D["Execute on faculty.db"]
+    C -->|SQL| D["Execute on faculty.db\n(faculty or former_people table)"]
     D --> E{Success?}
     E -->|Yes| F["Format as markdown table"]
     E -->|No| G["Fallback to RAG pipeline"]
@@ -623,19 +685,25 @@ flowchart TD
 
 1. **Individual Profile Chunks** (106 profiles) — Chunks containing "Back to Faculty Directory" with full biographical data
 2. **Listing Page Entries** (4 additional) — Faculty who appear on department listing pages but don't have individual profiles
+3. **Former People** (52 records) — Past office-bearers parsed from the "Former People" section into a separate `former_people` table
 
 ```mermaid
 flowchart TD
     A[data.txt - 785 raw chunks] --> B[Parse individual profiles]
     A --> C[Parse listing pages]
+    A --> FP[Parse former people section]
     B --> D[106 faculty records]
     C --> E[4 additional records]
+    FP --> FPR[52 former people records]
     D --> F[Merge + Deduplicate by email]
     E --> F
-    F --> G["faculty.db - 110 records, 16 columns"]
+    F --> G["faculty table — 110 records, 16 columns"]
+    FPR --> H["former_people table — 52 records, 4 columns"]
+    G --> I[faculty.db]
+    H --> I
 ```
 
-**Database Schema** (16 columns):
+**Faculty Table Schema** (16 columns):
 
 | Column | Type | Description |
 |---|---|---|
@@ -655,6 +723,15 @@ flowchart TD
 | `research_areas` | TEXT | Areas of research interest |
 | `education` | TEXT | Educational qualifications |
 | `memberships` | TEXT | Professional memberships (IEEE, ISTE, etc.) |
+
+**Former People Table Schema** (4 columns):
+
+| Column | Type | Description |
+|---|---|---|
+| `name` | TEXT | Person's full name |
+| `role` | TEXT | Chairman, Manager, Principal, Vice Principal, etc. |
+| `start_year` | INTEGER | Year they started the role |
+| `end_year` | INTEGER | Year they ended the role |
 
 **PhD Detection** handles edge cases in the raw data:
 - Standard: "Ph.D", "PhD", "Doctor of Philosophy"
@@ -680,6 +757,7 @@ LLM:  SELECT COUNT(*) FROM faculty WHERE has_phd = 1
 
 User: "who is the HOD of CSE"              → NOT_SQL (single person → RAG)
 User: "what are the admission requirements" → NOT_SQL (not faculty data → RAG)
+User: "list all former Principals"          → SQL (SELECT from former_people WHERE role = 'Principal')
 ```
 
 **Key routing distinction:** "who is the HOD of CSE" = NOT_SQL (single person, answered better by RAG with natural language). "list all HODs" = SQL (multiple people, needs structured table).
@@ -687,7 +765,7 @@ User: "what are the admission requirements" → NOT_SQL (not faculty data → RA
 The prompt includes:
 - The complete database schema with column descriptions
 - Department aliases (CSE = Computer Science Engineering, ECE = Electronics and Communication Engineering, etc.)
-- SQL guidelines (use LIKE with %keyword%, handle counts with COUNT(*), etc.)
+- SQL guidelines (use LIKE with %keyword% for departments, exact match for former_people roles, handle counts with COUNT(*), etc.)
 - Explicit examples of what should and shouldn't be SQL
 - Safety: only SELECT queries are allowed — the executor rejects anything else
 
@@ -750,7 +828,9 @@ Every query follows this dual-path flow:
 flowchart TD
     A[User Input] --> B{Slash command?}
     B -->|Yes| C[Execute command]
-    B -->|No| D[SQL Classification]
+    B -->|No| FM{Former keyword?}
+    FM -->|Yes| I
+    FM -->|No| D[SQL Classification]
     D --> E{SQL query generated?}
     E -->|Yes| F[Execute SQL on faculty.db]
     F --> G{SQL succeeded?}

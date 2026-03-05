@@ -35,6 +35,7 @@ _QUERY_EXPANSIONS = {
     r"\bchairman\b": "Chairman Mar Pauly Kannookadan Bishop",
     r"\bplacement\b": "placement training internship recruitment",
     r"\badmission\b": "admission application eligibility intake",
+    r"\bformer\b": "former people previous past ex",
 }
 
 def expand_query(question: str) -> str:
@@ -288,13 +289,30 @@ if not os.path.exists(FACULTY_DB):
 else:
     _conn = sqlite3.connect(FACULTY_DB)
     _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
-    _conn.close()
-    print(f"[*] Faculty SQL database loaded ({_cnt} records)")
+    # Ensure former_people table exists (may need rebuild if DB predates this table)
+    _has_former = _conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='former_people'"
+    ).fetchone()[0]
+    if not _has_former:
+        _conn.close()
+        print("[*] former_people table missing — rebuilding faculty.db...")
+        os.remove(FACULTY_DB)
+        from faculty_db import build_db
+        build_db(FACULTY_DB)
+        _conn = sqlite3.connect(FACULTY_DB)
+        _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
+        _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
+        _conn.close()
+        print(f"[*] Faculty SQL database rebuilt ({_cnt} faculty + {_fcnt} former people)")
+    else:
+        _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
+        _conn.close()
+        print(f"[*] Faculty SQL database loaded ({_cnt} faculty + {_fcnt} former people)")
 
 # ── Schema description for LLM ──────────────────────────────────────────────────
 
 _FACULTY_SCHEMA = """
-TABLE: faculty
+TABLE 1: faculty  (current faculty & staff)
 COLUMNS:
   id               INTEGER PRIMARY KEY
   name             TEXT        -- faculty member's full name
@@ -314,7 +332,15 @@ COLUMNS:
   education        TEXT        -- education history text
   memberships      TEXT        -- professional memberships
 
-DEPARTMENT ALIASES (map user terms to exact department values):
+TABLE 2: former_people  (past office-bearers who are no longer serving)
+COLUMNS:
+  id         INTEGER PRIMARY KEY
+  name       TEXT        -- person's full name
+  role       TEXT        -- one of: 'Chairman', 'Manager', 'Executive Director', 'Finance Officer', 'Advisor', 'Director', 'Principal', 'Vice Principal', 'Media Director', 'College Chairpersons'
+  start_year INTEGER     -- year they started the role
+  end_year   INTEGER     -- year they ended the role
+
+DEPARTMENT ALIASES (for faculty table):
   cse, cs       -> 'Computer Science Engineering'
   ece           -> 'Electronics and Communication Engineering'
   eee           -> 'Electrical and Electronics Engineering'
@@ -325,12 +351,17 @@ DEPARTMENT ALIASES (map user terms to exact department values):
   mech, me      -> (no Mechanical dept in data currently)
 
 IMPORTANT NOTES:
-  - Use LIKE with %keyword% for department matching; do NOT use exact equality
+  - For faculty table: use LIKE with %keyword% for department matching
   - For PhD queries: use has_phd = 1 for completed, phd_pursuing = 1 for pursuing
   - For HODs: WHERE designation LIKE '%Head%Department%'
-  - Always ORDER BY name for consistent output
+  - For FORMER/PAST people: query the former_people table, use exact role match (role = 'Principal'), NOT LIKE
+  - A question about "former Principals" → SELECT * FROM former_people WHERE role = 'Principal'
+  - A question about "former Vice Principals" → SELECT * FROM former_people WHERE role = 'Vice Principal'
+  - A question about "all former people" → SELECT * FROM former_people ORDER BY role, start_year
+  - Always ORDER BY name (faculty) or role, start_year (former_people) for consistent output
   - Use COUNT(*) for "how many" questions
   - Keep queries SELECT-only (read-only)
+  - NEVER query the faculty table for former/past/previous people — use former_people
 """
 
 # ── SQL classification + generation prompt ───────────────────────────────────────
@@ -346,11 +377,13 @@ PhD status, experience, publications, awards, patents, books, research areas, ed
 IMPORTANT — Use SQL ONLY for BULK/LIST queries that need to retrieve or filter MULTIPLE faculty members.
 
 Generate SQL for these types of queries:
-- "list all CSE faculty" / "faculty of ECE" / "show all professors" → listing many faculty
-- "CSE faculty with PhD" / "faculty with more than 5 publications" → filtered lists
-- "how many faculty have PhD" / "count of ECE professors" → aggregate counts
-- "faculty pursuing PhD in CSE" → filtered lists
-- ANY query asking for a LIST, ALL, COUNT, or FILTERED SET of faculty
+- "list all CSE faculty" / "faculty of ECE" / "show all professors" → SELECT from faculty table
+- "CSE faculty with PhD" / "faculty with more than 5 publications" → filtered lists from faculty
+- "how many faculty have PhD" / "count of ECE professors" → aggregate counts from faculty
+- "faculty pursuing PhD in CSE" → filtered lists from faculty
+- "list all former Principals" / "previous Managers" / "past Directors" → SELECT from former_people table
+- "who were the former Vice Principals" / "all former people" → SELECT from former_people table
+- ANY query asking for a LIST, ALL, COUNT, or FILTERED SET of faculty OR former people
 
 Respond NOT_SQL for these (let the RAG chatbot handle them naturally):
 - "who is the HOD of CSE" / "who is the principal" → asking about ONE specific person
@@ -359,6 +392,7 @@ Respond NOT_SQL for these (let the RAG chatbot handle them naturally):
 - ANY question about a single specific person, role, or position
 
 Key distinction: "who is the HOD of CSE" = NOT_SQL (single person). "list all HODs" = SQL (multiple people).
+Key distinction: "former Principals" = SQL (from former_people table). "current Principal" = NOT_SQL (single person).
 
 Rules:
 - ONLY generate SELECT statements. Never INSERT/UPDATE/DELETE.
@@ -402,6 +436,70 @@ def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str
     return result
 
 
+def _get_faculty_columns() -> set[str]:
+    """Return the set of column names in the faculty table."""
+    try:
+        conn = sqlite3.connect(FACULTY_DB)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(faculty)")
+        cols = {row[1] for row in cur.fetchall()}
+        conn.close()
+        return cols
+    except Exception:
+        return set()
+
+
+def _get_former_columns() -> set[str]:
+    """Return the set of column names in the former_people table."""
+    try:
+        conn = sqlite3.connect(FACULTY_DB)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(former_people)")
+        cols = {row[1] for row in cur.fetchall()}
+        conn.close()
+        return cols
+    except Exception:
+        return set()
+
+
+def validate_faculty_sql(sql: str) -> bool:
+    """Check that all columns referenced in the SQL actually exist in the target table(s).
+    Returns True if valid, False if any referenced column is not in the schema."""
+    # Determine which table(s) are queried
+    sql_upper = sql.upper()
+    valid_cols = set()
+    if 'FORMER_PEOPLE' in sql_upper:
+        valid_cols |= _get_former_columns()
+    if 'FACULTY' in sql_upper or 'FORMER_PEOPLE' not in sql_upper:
+        valid_cols |= _get_faculty_columns()
+    if not valid_cols:
+        return False
+
+    # Remove string literals so their content doesn't confuse the parser
+    cleaned = re.sub(r"'[^']*'", "''", sql)
+
+    # Tokenise: grab word-like identifiers (skip SQL keywords, functions, etc.)
+    sql_keywords = {
+        'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN',
+        'IS', 'NULL', 'ORDER', 'BY', 'GROUP', 'HAVING', 'AS', 'ON', 'JOIN',
+        'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'DISTINCT', 'ALL', 'ASC',
+        'DESC', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'EXISTS',
+        'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'CAST', 'COUNT', 'SUM', 'AVG',
+        'MIN', 'MAX', 'UPPER', 'LOWER', 'LENGTH', 'SUBSTR', 'TRIM', 'REPLACE',
+        'COALESCE', 'IFNULL', 'NULLIF', 'TYPEOF', 'TOTAL', 'ABS', 'ROUND',
+        'INTEGER', 'TEXT', 'REAL', 'BLOB', 'PRIMARY', 'KEY', 'AUTOINCREMENT',
+        'TABLE', 'FACULTY', 'FORMER_PEOPLE', 'TRUE', 'FALSE',
+    }
+    tokens = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', cleaned)
+    for tok in tokens:
+        if tok.upper() in sql_keywords:
+            continue
+        # If it looks like a column name (lowercase with underscores) and isn't valid
+        if tok.lower() == tok and '_' in tok and tok not in valid_cols:
+            return False
+    return True
+
+
 def execute_faculty_sql(sql: str) -> tuple[list[str], list[tuple]] | None:
     """Execute a read-only SQL query on faculty.db. Returns (column_names, rows) or None on error."""
     # Safety: only allow SELECT
@@ -423,7 +521,7 @@ def execute_faculty_sql(sql: str) -> tuple[list[str], list[tuple]] | None:
 def format_sql_results(columns: list[str], rows: list[tuple], question: str = "") -> str:
     """Format SQL query results as a markdown table."""
     if not rows:
-        return "No matching faculty members found."
+        return "No matching records found."
 
     # Single aggregate result (e.g. COUNT(*))
     if len(columns) == 1 and len(rows) == 1 and isinstance(rows[0][0], (int, float)):
@@ -437,6 +535,7 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
         c = c.replace("_", " ").title()
         c = c.replace("Has Phd", "PhD").replace("Phd Pursuing", "PhD Pursuing")
         c = c.replace("Experience Years", "Experience (Yrs)")
+        c = c.replace("Start Year", "From").replace("End Year", "To")
         display_cols.append(c)
 
     header = "| # | " + " | ".join(display_cols) + " |"

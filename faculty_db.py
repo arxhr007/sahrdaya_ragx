@@ -43,6 +43,16 @@ CREATE TABLE IF NOT EXISTS faculty (
 );
 """
 
+CREATE_FORMER_TABLE = """
+CREATE TABLE IF NOT EXISTS former_people (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    start_year INTEGER,
+    end_year   INTEGER
+);
+"""
+
 # ─── Department normalisation ────────────────────────────────────────────────────
 
 DEPT_NORMALISE = {
@@ -63,6 +73,86 @@ def normalise_dept(raw: str) -> str:
     # Handle cases where "Joined:" info leaked into dept name
     key = re.sub(r'\s*joined.*', '', key)
     return DEPT_NORMALISE.get(key, raw.strip())
+
+
+# ─── Former People parsing ───────────────────────────────────────────────────────
+
+# Role headings as they appear in the raw text (order matters — longest first)
+_FORMER_ROLES = [
+    "College Chairpersons",
+    "Executive Director",
+    "Finance Officer",
+    "Media Director",
+    "Vice Principal",
+    "Chairman",
+    "Manager",
+    "Advisor",
+    "Director",
+    "Principal",
+]
+# Build a regex that splits the text at role headings (inline, no newlines needed)
+# Uses lookahead so the role label is kept as a separate group
+_FORMER_ROLE_PAT = re.compile(
+    r'\s(' + '|'.join(re.escape(r) for r in _FORMER_ROLES) + r')\s',
+    re.IGNORECASE,
+)
+# Each person entry: Name  YYYY - YYYY
+_PERSON_ENTRY = re.compile(
+    r'([A-Za-z][A-Za-z .()\'\'\-]+?)\s+(\d{4})\s*[-–]\s*(\d{4})',
+)
+
+
+def parse_former_people(raw_text: str) -> list[dict]:
+    """Extract former people records from the raw data.txt text.
+
+    Returns a list of dicts with keys: name, role, start_year, end_year.
+    """
+    # Locate the "Former People" section
+    chunks = raw_text.split('\t')
+    former_text = ""
+    for i, chunk in enumerate(chunks):
+        if 'Former People' in chunk and 'Distinguished' in chunk:
+            # Strip chunk marker (e.g. "\nchunk_14") from end of text
+            cleaned = re.sub(r'\n?chunk_\d+\s*$', '', chunk)
+            former_text = cleaned
+            if i + 1 < len(chunks) and _PERSON_ENTRY.search(chunks[i + 1]):
+                next_cleaned = re.sub(r'\n?chunk_\d+\s*$', '', chunks[i + 1])
+                former_text += " " + next_cleaned
+            break
+
+    if not former_text:
+        return []
+
+    # Split by role headings — re.split with a capture group keeps the delimiters
+    parts = _FORMER_ROLE_PAT.split(former_text)
+    # parts alternates: [preamble, role1, text1, role2, text2, ...]
+    # Build a list of (role, text_after) pairs
+    role_lower_map = {r.lower(): r for r in _FORMER_ROLES}
+    records: list[dict] = []
+    current_role = None
+
+    for part in parts:
+        stripped = part.strip()
+        # Check if this part is a role label
+        if stripped.lower() in role_lower_map:
+            current_role = role_lower_map[stripped.lower()]
+            continue
+        if current_role is None:
+            continue
+        # Parse person entries under this role
+        for m in _PERSON_ENTRY.finditer(part):
+            name = re.sub(r'\s+', ' ', m.group(1)).strip()
+            # Title-case ALL CAPS names
+            if name == name.upper() and len(name) > 3:
+                name = ' '.join(w.title() if len(w) > 1 else w for w in name.split())
+            records.append({
+                'name': name,
+                'role': current_role,
+                'start_year': int(m.group(2)),
+                'end_year': int(m.group(3)),
+            })
+
+    return records
 
 # ─── Parsing ─────────────────────────────────────────────────────────────────────
 
@@ -346,13 +436,18 @@ def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
     print(f"[*] Parsed {len(listing_profiles)} additional faculty from listing pages")
     profiles.extend(listing_profiles)
 
-    # 3. Write to SQLite
+    # 3. Parse former people
+    former = parse_former_people(raw_text)
+    print(f"[*] Parsed {len(former)} former people records")
+
+    # 4. Write to SQLite
     if os.path.exists(db_path):
         os.remove(db_path)
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     cur.execute(CREATE_TABLE)
+    cur.execute(CREATE_FORMER_TABLE)
 
     for p in profiles:
         cur.execute("""
@@ -369,6 +464,12 @@ def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
             p['joined'], p['research_areas'], p['education'], p['memberships'],
         ))
 
+    for fp in former:
+        cur.execute(
+            "INSERT INTO former_people (name, role, start_year, end_year) VALUES (?, ?, ?, ?)",
+            (fp['name'], fp['role'], fp['start_year'], fp['end_year']),
+        )
+
     conn.commit()
 
     # Print summary
@@ -381,11 +482,19 @@ def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
     cur.execute("SELECT COUNT(*) FROM faculty WHERE phd_pursuing = 1")
     pursuing_count = cur.fetchone()[0]
 
-    print(f"\n[*] faculty.db built — {total} faculty members")
+    cur.execute("SELECT COUNT(*) FROM former_people")
+    former_total = cur.fetchone()[0]
+    cur.execute("SELECT role, COUNT(*) FROM former_people GROUP BY role ORDER BY COUNT(*) DESC")
+    former_counts = cur.fetchall()
+
+    print(f"\n[*] faculty.db built — {total} faculty + {former_total} former people")
     print(f"    PhDs: {phd_count}  |  PhD pursuing: {pursuing_count}")
     print(f"    Departments:")
     for dept, count in dept_counts:
         print(f"      {dept}: {count}")
+    print(f"    Former people by role:")
+    for role, count in former_counts:
+        print(f"      {role}: {count}")
 
     conn.close()
     return total
