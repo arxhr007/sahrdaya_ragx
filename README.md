@@ -243,4 +243,9 @@ ragx-backend/
 
 ## License
 
-Internal project — Sahrdaya College of Engineering & Technology.
+This repository is **All Rights Reserved**.
+
+- You may contribute to this repository through pull requests and approved collaboration workflows.
+- You may not copy, reuse, redistribute, relicense, or sell this code outside this repository without prior written permission from the copyright holder.
+
+See `LICENSE` for full legal terms.
