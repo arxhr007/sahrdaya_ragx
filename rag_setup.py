@@ -11,12 +11,13 @@ from operator import itemgetter
 import json
 import os
 import re
+from dotenv import load_dotenv
+load_dotenv()
 import hashlib
 import pickle
 import time
 import sqlite3
 from sentence_transformers import CrossEncoder
-
 
 # ============ QUERY EXPANSION ============
 
@@ -209,17 +210,18 @@ def rerank_docs(query: str, docs: list, top_k: int) -> list:
     return [doc for _, doc in scored[:top_k]]
 
 # LLM
-# ------------------ GROQ API KEY (Replace with yours) ------------------
-GROQ_API_KEY = ""
+# ------------------ GROQ API KEY (from environment variable) ------------------
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 
-if not GROQ_API_KEY or GROQ_API_KEY.strip() == "":
+if not GROQ_API_KEY:
     print("\n" + "="*70)
     print("ERROR: Groq API Key is missing!")
     print("="*70)
     print("\nPlease get your API key from:")
     print("🔗 https://console.groq.com/keys")
-    print("\nThen add it to rag_setup.py (line ~210):")
-    print('   GROQ_API_KEY = "gsk_..."')
+    print("\nThen set it as an environment variable:")
+    print('   Windows (PowerShell): $env:GROQ_API_KEY = "gsk_..."')
+    print('   Linux/macOS:          export GROQ_API_KEY="gsk_..."')
     print("="*70 + "\n")
     exit(1)
 
