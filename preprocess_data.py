@@ -1,11 +1,11 @@
 """
-preprocess_data.py — Run this ONCE (or whenever data.txt changes) to produce
+preprocess_data.py — Run this ONCE (or whenever sahrdaya_rag.txt changes) to produce
 data_cleaned.jsonl which rag_setup.py loads at startup.
 
 Usage:
     python preprocess_data.py
 
-Input:  data.txt          (raw scraped chunks:  chunk_N<TAB>content)
+Input:  sahrdaya_rag.txt  (raw scraped chunks:  chunk_N<TAB>content)
 Output: data_cleaned.jsonl (one JSON object per optimized chunk)
 """
 
@@ -252,7 +252,7 @@ def _split_text(text: str) -> list[str]:
 # 4.  MAIN PIPELINE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-INPUT_FILE  = "data.txt"
+INPUT_FILE  = "sahrdaya_rag.txt"
 OUTPUT_FILE = "data_cleaned.jsonl"
 
 

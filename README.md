@@ -69,7 +69,7 @@ flowchart TD
         A["🌐 sahrdaya.ac.in"] -->|"sitemap<br/>discovery"| B["🗺️ URL Queue"]
         B -->|"4 threads"| C["🎭 Playwright<br/>Renderer"]
         C -->|"JS execution<br/>+ DOM parse"| D["🧹 BS4<br/>Cleaner"]
-        D --> E["📄 data.txt<br/>~2K chunks"]
+        D --> E["📄 sahrdaya_rag.txt<br/>~2K chunks"]
     end
 
     subgraph ETL["⚙️ ETL Pipeline"]
@@ -78,10 +78,10 @@ flowchart TD
         G -->|"alias<br/>injection"| H["📦 data_cleaned.jsonl<br/>18 categories"]
         E -->|"role-label<br/>parsing"| FP["👥 Former People<br/>Structurer"]
         FP -->|"10 role chunks<br/>+ summary"| H
-        E -->|"regex<br/>parsing"| I["👤 Faculty<br/>Extractor"]
+        E -->|"legacy + listing<br/>parsing"| I["👤 Faculty<br/>Extractor"]
         E -->|"former people<br/>parsing"| IP["👥 Former People<br/>Parser"]
         STCSV["🧾 students.csv"] --> STING["👩‍🎓 student_db.py<br/>Normalizer + Loader"]
-        I -->|"110 profiles<br/>16 columns"| K["🗃️ SQLite DB<br/>faculty.db"]
+        I -->|"~109 profiles<br/>16 columns"| K["🗃️ SQLite DB<br/>college.db"]
         IP -->|"52 records<br/>10 roles"| K
         STING -->|"students + interests + links<br/>incl. photo/projects"| K
     end
@@ -148,13 +148,16 @@ flowchart TD
 | File | Role |
 |---|---|
 | `scraper.py` | Multi-threaded web scraper (Playwright + Sitemap, thread-safe, 4 output formats) |
-| `data.txt` | Raw scraped chunks (TSV: `chunk_id\tcontent`) |
+| `sahrdaya_rag.txt` | Raw scraped chunks (TSV: `chunk_id\tcontent`) |
 | `preprocess_data.py` | Cleans, categorises (18 categories), sentence-splits, injects search aliases, and structures former people data |
 | `data_cleaned.jsonl` | Optimised chunks ready for indexing |
-| `faculty_db.py` | Builds `faculty` + `former_people` tables and coordinates student ingestion into the same DB |
+| `sql_db_setup.py` | Orchestrates shared SQL DB build and runs faculty/former people/student loaders into one SQLite file |
+| `faculty_extractor.py` | Parses faculty data from raw chunks (supports both legacy profile blocks and current listing-style chunks) |
+| `former_people_extractor.py` | Parses and inserts former office-bearers into `former_people` |
 | `student_db.py` | Loads `students.csv`, normalizes interests, and populates `students`, `interests`, `student_interests` |
 | `students.csv` | Student source data (bio/biography, interests, photo URL, social links, projects links) |
-| `faculty.db` | Shared SQLite database for faculty, former people, students, and canonical interests |
+| `college.db` | Shared SQLite database for faculty, former people, students, and canonical interests |
+| `sql_smoke_test.py` | Quick DB validation (schema + row sanity checks after ingestion/parser changes) |
 | `rag_setup.py` | Builds FAISS + BM25 indexes, routes SQL vs RAG, includes single-student fast lookup, and formats SQL output |
 | `main.py` | Interactive CLI chatbot with stats, ASCII dashboard, and session analytics |
 | `api/` | FastAPI app split into `core`, `routes`, and `services` layers |
@@ -218,11 +221,7 @@ python scraper.py https://www.sahrdaya.ac.in/ -o sahrdaya --threads 8 --use-play
 python scraper.py https://www.sahrdaya.ac.in/faculty -o sahrdaya --single --use-playwright
 ```
 
-This produces `sahrdaya_rag.txt`. Rename/copy it to `data.txt`:
-
-```bash
-copy sahrdaya_rag.txt data.txt
-```
+This produces `sahrdaya_rag.txt`, which is the default input for preprocessing and DB setup.
 
 ### Step 2 — Preprocess
 
@@ -230,11 +229,11 @@ copy sahrdaya_rag.txt data.txt
 python preprocess_data.py
 ```
 
-Reads `data.txt`, cleans text, detects categories, splits into sentence-aware chunks, injects search aliases, structures former people data into per-role chunks, and writes `data_cleaned.jsonl`.
+Reads `sahrdaya_rag.txt`, cleans text, detects categories, splits into sentence-aware chunks, injects search aliases, structures former people data into per-role chunks, and writes `data_cleaned.jsonl`.
 
 Sample output:
 ```
-[1/4] Loaded 785 raw chunks from data.txt
+[1/4] Loaded 785 raw chunks from sahrdaya_rag.txt
 [2/4] Cleaned text — kept 784 chunks, skipped 1 near-empty
 [3/4] Categorised & re-chunked — 2198 final chunks (466 large chunks were split)
 [4/4] Wrote 2198 chunks to data_cleaned.jsonl
@@ -248,8 +247,9 @@ python main.py
 
 On first run, FAISS and BM25 indexes are built from `data_cleaned.jsonl` (~50s). Subsequent runs load from `.index_cache/` in ~0.1s. The cache auto-invalidates when the data file changes (MD5 hash check).
 
-If `faculty.db` doesn't exist, it's auto-built from `data.txt` on startup.
+If `college.db` doesn't exist, it's auto-built from `sahrdaya_rag.txt` on startup.
 Student data from `students.csv` is also loaded at startup into `students`, `interests`, and `student_interests` in the same DB.
+For a quick integrity check after parser or ingestion updates, run `python sql_smoke_test.py`.
 
 Student profile SQL output includes: name, graduation year, department, bio, photo URL, Instagram, GitHub, projects links, LinkedIn, and website.
 
@@ -412,13 +412,16 @@ If you connect this to GitHub Actions, use this same sequence as your deploy job
 ```
 ragx-backend/
 ├── scraper.py              # Web scraper (multi-threaded, Playwright)
-├── data.txt                # Raw scraped data
+├── sahrdaya_rag.txt        # Raw scraped data (from scraper output)
 ├── preprocess_data.py      # Data preprocessing pipeline
 ├── data_cleaned.jsonl      # Processed chunks (generated)
-├── faculty_db.py           # Faculty data parser → SQLite DB builder
+├── sql_db_setup.py         # Shared SQLite DB setup (faculty + former + students)
+├── faculty_extractor.py    # Faculty parser/loader (legacy + listing formats)
+├── former_people_extractor.py # Former people parser/loader
 ├── student_db.py           # Student CSV loader + interest normalization
 ├── students.csv            # Student profile source data
-├── faculty.db              # SQLite faculty database (auto-generated)
+├── college.db              # Shared SQLite database (auto-generated)
+├── sql_smoke_test.py       # SQL ingestion sanity test
 ├── rag_setup.py            # RAG engine (indexes, chains, SQL classifier)
 ├── main.py                 # CLI chatbot with session analytics
 ├── api/

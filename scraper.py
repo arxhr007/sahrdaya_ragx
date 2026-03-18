@@ -51,15 +51,15 @@ from queue import Queue, Empty
 import requests
 from bs4 import BeautifulSoup
 
-# ------------------ GROQ API KEY (Replace with yours) ------------------
-GROQ_API_KEY = ""
-# ----------------------------------------------------------------------------------
+# ------------------ GROQ API KEY (Environment) ------------------
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
+# ---------------------------------------------------------------
 
 if not GROQ_API_KEY or GROQ_API_KEY.strip() == "":
     print("\n⚠️  WARNING: Groq API Key is missing!")
     print("   → Groq-based JSON structuring will be skipped (fallback to local structuring)")
     print("   → Get your API key from: https://console.groq.com/keys")
-    print("   → Add it to scraper.py (line ~55): GROQ_API_KEY = \"gsk_...\"\n")
+    print("   → Set env var GROQ_API_KEY (or in .env) before running for model-based structuring\n")
 
 # Optional Playwright support (only if installed)
 try:
@@ -84,6 +84,16 @@ CHUNK_CHAR_SIZE = 1800    # characters per chunk for RAG
 MAX_CHUNKS_FOR_MODEL = 12 # how many chunks to send to Groq for structuring
 NUM_THREADS = 4           # default number of concurrent threads
 # -----------------------------------------------------------------
+
+DOCUMENT_EXTENSIONS = (
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+    ".odt", ".rtf", ".txt", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"
+)
+
+ASSET_SKIP_EXTENSIONS = (
+    ".css", ".js", ".ico", ".woff", ".woff2", ".ttf", ".eot",
+    ".mp4", ".webm", ".mp3", ".wav", ".zip", ".rar", ".7z"
+)
 
 # ---------------- Sahrdaya.ac.in Known Sitemap ----------------
 # Dynamic departments for URL expansion
@@ -280,6 +290,11 @@ def fetch_with_requests(url: str, timeout: int = 15) -> str:
     resp.raise_for_status()
     return resp.text
 
+
+def is_document_link(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return path.endswith(DOCUMENT_EXTENSIONS)
+
 def fetch_with_playwright(url: str, timeout: int = 60) -> str:
     if not _HAS_PLAYWRIGHT:
         raise RuntimeError("Playwright not installed. Install with `pip install playwright` and run `playwright install`.")
@@ -369,6 +384,84 @@ def extract_links_and_buttons(soup: BeautifulSoup, base_url: str) -> Set[str]:
 
     return links
 
+
+def _nearest_heading_text(tag) -> str:
+    """Best-effort section heading near a link/button for context labeling."""
+    try:
+        # First try heading in the same section/container.
+        container = tag
+        for _ in range(4):
+            if not container:
+                break
+            if getattr(container, "name", None) in ("section", "article", "div", "main"):
+                h = container.find(["h1", "h2", "h3", "h4", "h5", "h6"])
+                if h:
+                    txt = h.get_text(" ", strip=True)
+                    if txt:
+                        return txt
+            container = container.parent
+
+        # Fallback: nearest previous heading in document order.
+        prev_h = tag.find_previous(["h1", "h2", "h3", "h4", "h5", "h6"])
+        if prev_h:
+            txt = prev_h.get_text(" ", strip=True)
+            if txt:
+                return txt
+    except Exception:
+        pass
+    return ""
+
+
+def extract_document_references(soup: BeautifulSoup, base_url: str) -> List[Dict[str, str]]:
+    """Extract document links (pdf/doc/etc.) plus a short purpose label."""
+    refs_by_url: Dict[str, Dict[str, str]] = {}
+
+    def add_ref(url: str, label: str, section: str = ""):
+        clean = url.split("#")[0].rstrip("/")
+        if not is_document_link(clean):
+            return
+
+        label = re.sub(r"\s+", " ", (label or "").strip())
+        section = re.sub(r"\s+", " ", (section or "").strip())
+        if not label:
+            filename = os.path.basename(urlparse(clean).path)
+            label = filename or "Document"
+
+        purpose = f"{section} - {label}" if section and section.lower() not in label.lower() else label
+        refs_by_url[clean] = {
+            "url": clean,
+            "label": label,
+            "purpose": purpose,
+        }
+
+    # Anchor-based links (main source for downloadable PDFs/docs)
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href or href.lower().startswith("javascript:"):
+            continue
+        full = urljoin(base_url, href)
+        text = a.get_text(" ", strip=True)
+        label = text or (a.get("title") or "") or (a.get("aria-label") or "")
+        section = _nearest_heading_text(a)
+        add_ref(full, label, section)
+
+    # Some pages use button/data-href downloads.
+    for btn in soup.find_all(["button", "input"]):
+        cand = (btn.get("data-href") or "").strip()
+        if not cand:
+            onclick = (btn.get("onclick") or "")
+            m = re.search(r"(?:location|window\.location|location\.href)\s*=\s*['\"]([^'\"]+)['\"]", onclick, re.I)
+            if m:
+                cand = m.group(1)
+        if not cand:
+            continue
+        full = urljoin(base_url, cand)
+        label = (btn.get_text(" ", strip=True) if hasattr(btn, "get_text") else "") or (btn.get("value") or "")
+        section = _nearest_heading_text(btn)
+        add_ref(full, label, section)
+
+    return sorted(refs_by_url.values(), key=lambda r: (r.get("purpose", ""), r.get("url", "")))
+
 def extract_meta(soup: BeautifulSoup) -> Dict:
     title = ""
     try:
@@ -449,6 +542,7 @@ def chunk_pages_with_tracking(pages: List[Dict]) -> tuple[List[Dict], Dict[str, 
             "url": url,
             "title": page.get("title", ""),
             "description": page.get("description", ""),
+            "document_links": page.get("document_links", []),
             "content_hash": content_hash,
             "chunk_ids": chunk_ids,
             "chunk_range": chunk_range,
@@ -575,6 +669,11 @@ def fetch_single_page(url: str, use_playwright: bool = False) -> Optional[Dict]:
     Thread-safe - can be called from multiple threads.
     """
     normalized = url.rstrip("/#")
+
+    # Skip direct document URLs — we keep document links from HTML pages,
+    # and let the assistant return those links when users ask for PDFs/docs.
+    if is_document_link(normalized):
+        return None
     
     # Rate limiting
     if rate_limiter:
@@ -605,12 +704,19 @@ def fetch_single_page(url: str, use_playwright: bool = False) -> Optional[Dict]:
         
         # Also extract links for discovery mode
         links = extract_links_and_buttons(soup, normalized)
+        doc_refs = extract_document_references(soup, normalized)
+        if doc_refs:
+            lines = ["Document Links:"]
+            for ref in doc_refs:
+                lines.append(f"- {ref['purpose']}: {ref['url']}")
+            text = text + "\n\n" + "\n".join(lines)
         
         return {
             "url": normalized,
             "title": meta.get("title", ""),
             "description": meta.get("description", ""),
             "text": text,
+            "document_links": doc_refs,
             "links": list(links)
         }
     except Exception as e:
@@ -689,11 +795,8 @@ def crawl_sitemap_multithreaded(urls: List[str], base_domain: str, use_playwrigh
                                 
                                 normalized_link = link.rstrip("/#")
                                 
-                                # Skip non-page URLs (files, assets, etc.)
-                                skip_extensions = ('.pdf', '.jpg', '.jpeg', '.png', '.gif', '.svg', 
-                                                   '.css', '.js', '.ico', '.woff', '.woff2', '.ttf',
-                                                   '.mp4', '.webm', '.mp3', '.zip', '.doc', '.docx',
-                                                   '.xls', '.xlsx', '.ppt', '.pptx')
+                                # Skip static assets/media and document files.
+                                skip_extensions = ASSET_SKIP_EXTENSIONS + DOCUMENT_EXTENSIONS
                                 if any(normalized_link.lower().endswith(ext) for ext in skip_extensions):
                                     continue
                                 
@@ -772,6 +875,8 @@ def crawl_with_discovery_multithreaded(start_url: str, base_domain: str, use_pla
                             parsed = urlparse(link)
                             if parsed.netloc == base_domain:
                                 normalized = link.split("#")[0].rstrip("/")
+                                if any(normalized.lower().endswith(ext) for ext in (ASSET_SKIP_EXTENSIONS + DOCUMENT_EXTENSIONS)):
+                                    continue
                                 if queued.add(normalized) and len(queued) <= MAX_PAGES:
                                     url_queue.put(link)
                         
@@ -837,6 +942,8 @@ def crawl_page(url: str, base_domain: str, use_playwright: bool = False):
                 parsed = urlparse(link)
             if parsed.netloc == base_domain:
                 next_link = link.split("#")[0].rstrip("/")
+                if any(next_link.lower().endswith(ext) for ext in (ASSET_SKIP_EXTENSIONS + DOCUMENT_EXTENSIONS)):
+                    continue
                 if next_link not in visited and len(visited) < MAX_PAGES:
                     crawl_page(next_link, base_domain, use_playwright=use_playwright)
     except Exception as e:
@@ -853,41 +960,19 @@ def scrape_single_page(url: str, output_prefix: str, use_playwright: bool = Fals
     """
     print(f"[*] Scraping single page: {url}")
 
-    # Fetch the page
-    normalized = url.rstrip("/#")
-    html = ""
-    try:
-        if use_playwright and _HAS_PLAYWRIGHT:
-            html = fetch_with_playwright(normalized)
-        else:
-            try:
-                html = fetch_with_requests(normalized)
-                if len(html) < 1500 and _HAS_PLAYWRIGHT and use_playwright:
-                    html = fetch_with_playwright(normalized)
-            except Exception as e_req:
-                if _HAS_PLAYWRIGHT and use_playwright:
-                    html = fetch_with_playwright(normalized)
-                else:
-                    print(f"[!] Failed to fetch {normalized}: {e_req}")
-                    return
-    except Exception as e:
-        print(f"[!] Fetch failed for {normalized}: {e}")
+    # Fetch HTML page through the shared extraction path.
+    page = fetch_single_page(url, use_playwright=use_playwright)
+    if not page:
+        print("[!] Failed to fetch/extract page. Note: direct document URLs are skipped.")
         return
 
-    soup = BeautifulSoup(html, "html.parser")
-    meta = extract_meta(soup)
-    text = clean_text_from_soup(soup)
+    normalized = page["url"]
+    text = page.get("text", "")
 
     if not text or len(text) < 30:
         print("[!] Page had no meaningful content. Aborting.")
         return
 
-    page = {
-        "url": normalized,
-        "title": meta.get("title", ""),
-        "description": meta.get("description", ""),
-        "text": text,
-    }
     print(f"[+] Fetched: {page['title'] or normalized}  ({len(text)} chars)")
 
     # --- Determine next chunk_id from existing data ---
@@ -952,6 +1037,7 @@ def scrape_single_page(url: str, output_prefix: str, use_playwright: bool = Fals
         "url": normalized,
         "title": page.get("title", ""),
         "description": page.get("description", ""),
+        "document_links": page.get("document_links", []),
         "content_hash": content_hash,
         "chunk_ids": chunk_ids,
         "chunk_range": {

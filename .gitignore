@@ -1,8 +1,8 @@
 # Index cache (generated on first run)
 .index_cache/
 
-# Faculty database (generated from data.txt)
-faculty.db
+# Shared SQLite database (generated from data.txt + students.csv)
+college.db
 
 # Python
 __pycache__/

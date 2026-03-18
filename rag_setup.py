@@ -54,7 +54,7 @@ def expand_query(question: str) -> str:
 # Expects data_cleaned.jsonl produced by  python preprocess_data.py
 
 CLEANED_FILE = "data_cleaned.jsonl"
-RAW_FILE     = "data.txt"
+RAW_FILE     = "sahrdaya_rag.txt"
 
 # Keep raw text for direct faculty extraction
 raw_docs_text = ""
@@ -82,7 +82,7 @@ if os.path.exists(CLEANED_FILE):
     print(f"[*] Loaded {len(docs)} optimized chunks (already cleaned + re-chunked)")
 else:
     print(f"[!] {CLEANED_FILE} not found — run:  python preprocess_data.py")
-    print("[*] Falling back to raw data.txt loading...")
+    print("[*] Falling back to raw sahrdaya_rag.txt loading...")
     from langchain_community.document_loaders import DirectoryLoader, TextLoader
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     loader = DirectoryLoader(".", glob="*.txt", loader_cls=TextLoader, loader_kwargs={'encoding': 'utf-8'})
@@ -288,16 +288,17 @@ INSTRUCTIONS:
 - Resolve pronouns using conversation history.
 - If the answer is not in context, suggest contacting: admission@sahrdaya.ac.in / 0480 2759275.
 - Redirect non-college queries to Sahrdaya topics.
+- If asked for a document, PDF, regulation, form, handbook, or download, return the direct URL(s) from context first.
 - Be concise but complete.""")
 
 # ============ FACULTY SQL DATABASE ============
 
-FACULTY_DB = "faculty.db"
+FACULTY_DB = "college.db"
 
 # Build DB on first import if it doesn't exist
 if not os.path.exists(FACULTY_DB):
-    print("[*] faculty.db not found — building from data.txt...")
-    from faculty_db import build_db
+    print("[*] college.db not found — building from sahrdaya_rag.txt...")
+    from sql_db_setup import build_db
     build_db(FACULTY_DB)
 else:
     _conn = sqlite3.connect(FACULTY_DB)
@@ -308,9 +309,9 @@ else:
     ).fetchone()[0]
     if not _has_former:
         _conn.close()
-        print("[*] former_people table missing — rebuilding faculty.db...")
+        print("[*] former_people table missing — rebuilding college.db...")
         os.remove(FACULTY_DB)
-        from faculty_db import build_db
+        from sql_db_setup import build_db
         build_db(FACULTY_DB)
         _conn = sqlite3.connect(FACULTY_DB)
         _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
@@ -322,7 +323,7 @@ else:
         _conn.close()
         print(f"[*] Faculty SQL database loaded ({_cnt} faculty + {_fcnt} former people)")
 
-# Ensure student tables/data exist in the same faculty.db file.
+# Ensure student tables/data exist in the same shared DB file.
 _student_stats = ensure_student_data(FACULTY_DB)
 _conn = sqlite3.connect(FACULTY_DB)
 _scnt = _conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
@@ -751,7 +752,7 @@ def validate_faculty_sql(sql: str) -> bool:
 
 
 def execute_faculty_sql(sql: str) -> tuple[list[str], list[tuple]] | None:
-    """Execute a read-only SQL query on faculty.db. Returns (column_names, rows) or None on error."""
+    """Execute a read-only SQL query on college.db. Returns (column_names, rows) or None on error."""
     # Safety: only allow SELECT
     if not sql.strip().upper().startswith("SELECT"):
         return None

@@ -9,7 +9,7 @@ Things to fix, improve, and add to the RAG pipeline.
 - ✅ (DONE) **Persistent vector index** — FAISS index saved to `.index_cache/faiss/` with `vectorstore.save_local()`. Reloads in ~0.1s instead of rebuilding in ~50s. Cache invalidates automatically when `data_cleaned.jsonl` changes (MD5 hash check)
 - ✅ (DONE) **BM25 index persistence** — BM25 retrievers serialized to `.index_cache/bm25.pkl` with `pickle`. Loaded on subsequent runs, skipping full rebuild
 - ✅ (DONE) **`.gitignore`** — Added with entries for `.index_cache/`, `__pycache__/`, `.env`, `venv/`, IDE folders, OS files, and debug scripts
-- ✅ (DONE) **Faculty SQL database** — Built `faculty_db.py` to parse faculty profiles from raw data into a SQLite database (110 records, 16 columns). Enables precise filtering, counting, and listing via LLM-generated SQL
+- ✅ (DONE) **Shared SQL database build pipeline** — `sql_db_setup.py` now orchestrates `faculty_extractor.py`, `former_people_extractor.py`, and `student_db.py` into `college.db`. Faculty parsing supports both legacy profile blocks and listing/card chunks
 - ✅ (DONE) **SQL query routing** — LLM-based classifier in `rag_setup.py` routes bulk faculty queries to SQL and single-person/general queries to RAG. Includes schema-aware prompt, safety (SELECT-only), and automatic fallback to RAG on SQL failure
 - ✅ (DONE) **Session analytics CLI** — `main.py` tracks per-query stats (response time, tokens, chunks) and provides `/graph` dashboard with ASCII bar charts, sparklines, chunk heatmaps, and context growth visualisation
 - ✅ (DONE) **Index cache invalidation** — MD5 hash of `data_cleaned.jsonl` stored alongside cached indexes. Automatically rebuilds when data changes
@@ -46,7 +46,7 @@ Things to fix, improve, and add to the RAG pipeline.
 
 ## LLM & Generation
 
-- 🔶 (Pending) **Streaming responses** — Currently waits for the full response before printing. Stream tokens as they arrive for faster perceived latency
+- ✅ (DONE) **Streaming responses** — API endpoint `/api/chat/stream` returns SSE events (`started`, `token`, `completed`) for incremental frontend rendering
 - 🔶 (Pending) **Fallback model** — If Groq API is down or rate-limited, fall back to a local model (e.g., Ollama with Llama 3) or another API
 - 🔶 (Pending) **Answer citation** — Include chunk IDs or source URLs in the response so users can verify where the answer came from. Chunk IDs are tracked internally (visible via `/chunks`) but not shown in the LLM's answer text
 - 🔶 (Pending) **Guardrails** — Add input/output validation: block prompt injection attempts, filter inappropriate responses, enforce response length limits
@@ -56,19 +56,19 @@ Things to fix, improve, and add to the RAG pipeline.
 
 ## Infrastructure & DevOps
 
-- 🔶 (Pending) **Docker container** — Package the entire pipeline (Python, dependencies, NLTK data, model weights) into a Docker image for one-command deployment
+- ✅ (DONE) **Docker container + compose deployment** — `Dockerfile`, `docker-compose.yml`, and `docker-compose.nginx.yml` support single-container or Nginx-balanced multi-replica deployment
 - 🟡 (Partial) **Logging** — *Partially done*: `main.py` tracks per-query stats (response time, token estimates, chunk IDs, SQL queries) in `session_stats` and displays via `/stats` and `/graph`. Missing: persistent structured logging to file (JSON lines), query logs across sessions, error logging
-- 🔶 (Pending) **Rate limiting** — Protect the Groq API key from abuse if exposed via an API server
+- 🟡 (Partial) **Rate limiting** — Local RPM/TPM/RPD/TPD guardrails and load controls are implemented; global distributed rate limiting is still pending
 - 🔶 (Pending) **Caching** — Cache responses for identical or near-identical queries. Many users ask the same questions ("who is the principal", "admission process")
 - 🔶 (Pending) **Scheduled re-scraping** — Auto-scrape the website on a schedule (weekly/monthly) and reprocess data to keep the chatbot up to date
-- 🔶 (Pending) **API server** — Expose the chatbot as a REST/WebSocket API (FastAPI is already in requirements) for frontend integration
+- ✅ (DONE) **API server** — FastAPI service is live with chat, streaming, sessions, health/readiness/load/limits endpoints
 
 ---
 
 ## Nice to Have
 
 - 🔶 (Pending) **Multi-language support** — Handle Malayalam queries (many students might ask in their native language)
-- 🔶 (Pending) **Image/PDF extraction** — Some college info is in PDFs and images (event posters, circulars). OCR + PDF parsing would expand coverage
+- 🟡 (Partial) **Document extraction strategy** — OCR is intentionally disabled; scraper now captures and labels PDF/DOC links for retrieval context. Full document-content parsing remains optional for future work
 - 🔶 (Pending) **User feedback loop** — Let users rate answers as helpful/not helpful. Use this to identify weak spots in retrieval
 - 🟡 (Partial) **Analytics dashboard** — *Partially done*: `/graph` command provides a per-session ASCII dashboard with response times, token usage, chunk heatmaps, and sparklines. Missing: persistent cross-session analytics, web-based dashboard, most-asked-questions tracking
 - 🔶 (Pending) **Voice input** — Integrate speech-to-text for accessibility

@@ -1,5 +1,5 @@
 """
-student_db.py — Ingest students.csv into faculty.db (same DB file as faculty/fomer).
+student_db.py — Ingest students.csv into shared college.db.
 
 Creates and maintains three tables:
 - students
