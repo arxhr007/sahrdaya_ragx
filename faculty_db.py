@@ -16,6 +16,8 @@ import re
 import os
 import sys
 
+from student_db import load_students_into_connection
+
 RAW_FILE = "data.txt"
 DB_FILE  = "faculty.db"
 
@@ -470,6 +472,9 @@ def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
             (fp['name'], fp['role'], fp['start_year'], fp['end_year']),
         )
 
+    # 5. Load students from students.csv into the same SQLite database.
+    student_stats = load_students_into_connection(conn)
+
     conn.commit()
 
     # Print summary
@@ -487,8 +492,21 @@ def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
     cur.execute("SELECT role, COUNT(*) FROM former_people GROUP BY role ORDER BY COUNT(*) DESC")
     former_counts = cur.fetchall()
 
+    cur.execute("SELECT COUNT(*) FROM students")
+    students_total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM interests")
+    interests_total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM student_interests")
+    student_interest_links = cur.fetchone()[0]
+
     print(f"\n[*] faculty.db built — {total} faculty + {former_total} former people")
     print(f"    PhDs: {phd_count}  |  PhD pursuing: {pursuing_count}")
+    if student_stats.get("csv_found"):
+        print(
+            f"    Students: {students_total}  |  Canonical interests: {interests_total}  |  Links: {student_interest_links}"
+        )
+    else:
+        print("    Students: students.csv not found (student tables created, no rows loaded)")
     print(f"    Departments:")
     for dept, count in dept_counts:
         print(f"      {dept}: {count}")

@@ -21,12 +21,16 @@ RAG:               Question ──▶ Search relevant docs ──▶ LLM (reads 
 ```mermaid
 flowchart LR
     A[🌐 College Website] -->|scraper.py| B[📄 data.txt]
+  SCSV[🧾 students.csv] -->|student_db.py| I[🗃️ faculty.db]
     B -->|preprocess_data.py| C[📦 data_cleaned.jsonl]
     B -->|faculty_db.py| I[🗃️ faculty.db]
     C -->|rag_setup.py| D[🔍 BM25 Index]
     C -->|rag_setup.py| E[🧠 FAISS Vector Index]
     F[❓ User Query] --> G{🧠 LLM Classifier}
-    G -->|bulk faculty/former| H[📊 SQL Engine]
+  F --> FS[👤 Student Fast Lookup]
+  FS -->|match| H[📊 SQL Engine]
+  FS -->|no match| G
+  G -->|bulk faculty/former/students| H
     I --> H
     G -->|general| J[⚡ Hybrid Retriever]
     D --> J
@@ -43,10 +47,10 @@ flowchart LR
 |---|---|---|
 | 1. Scrape | Crawl the college website, extract text | `scraper.py` |
 | 2. Preprocess | Clean, categorise, chunk, inject aliases, structure former people | `preprocess_data.py` |
-| 3. Faculty DB | Parse faculty profiles → SQLite database | `faculty_db.py` |
+| 3. Structured DB | Build shared SQLite data: faculty + former people + students + interests | `faculty_db.py`, `student_db.py` |
 | 4. Index | Build BM25 + FAISS search indexes | `rag_setup.py` |
-| 5. Route | LLM classifies query → SQL (bulk faculty) or RAG (everything else) | `rag_setup.py` |
-| 6. Generate | SQL table for bulk queries, LLM answer for everything else | `rag_setup.py` |
+| 5. Route | Student-name fast path + LLM classification for SQL (bulk faculty/former/students) vs RAG | `rag_setup.py` |
+| 6. Generate | SQL formatted output for entity queries, LLM answer for general queries | `rag_setup.py` |
 
 ---
 
@@ -632,11 +636,11 @@ Assistant: Dr. Jis Paul has published...
 
 ---
 
-## SQL-Based Faculty Queries (LLM-Generated SQL)
+## SQL-Based Entity Queries (LLM-Generated SQL)
 
-Bulk faculty queries are handled by a **structured SQL pipeline** instead of RAG. The LLM classifies each query and, if it requires listing, filtering, or aggregating **multiple** faculty members, generates a SQL query to run against a SQLite database.
+Bulk entity queries are handled by a **structured SQL pipeline** instead of RAG. The LLM classifies each query and, if it requires listing, filtering, or aggregating **multiple** records, generates a SQL query to run against the shared SQLite database.
 
-Single-person queries like "who is the HOD of CSE" or "tell me about Dr. Raju G" are **not** routed to SQL — they go through normal RAG for a natural-language answer.
+Single-person faculty queries like "who is the HOD of CSE" are **not** routed to SQL — they go through normal RAG for a natural-language answer. Single-student lookups such as "who is aaron" use a deterministic SQL fast path.
 
 ### Former People — SQL Table
 
@@ -649,6 +653,26 @@ User: "list all former Principals"
 ```
 
 The `former_people` table has 52 records across 10 roles (Chairman, Manager, Executive Director, Finance Officer, Advisor, Director, Principal, Vice Principal, Media Director, College Chairpersons). It is built by `faculty_db.py` by parsing the "Former People" section of `data.txt`.
+
+### Student Profiles + Interests — SQL Tables
+
+Student data is loaded from `students.csv` into three normalized tables in `faculty.db`:
+
+- `students` (profile columns including `bio`, `photo_url`, `projects_links`, social links)
+- `interests` (canonical interest dictionary)
+- `student_interests` (many-to-many links)
+
+This supports queries like:
+
+```
+User: "people who likes chess"
+→ LLM generates SQL JOIN across students + student_interests + interests
+→ Returns all matching students with consistent canonical interest matching
+
+User: "who is aaron"
+→ student-name fast path resolves record directly
+→ Returns formatted profile including photo URL and projects links
+```
 
 ### Why not use RAG for bulk faculty queries?
 
@@ -668,30 +692,35 @@ Even with enough context, LLMs are unreliable at extracting long structured list
 
 ```mermaid
 flowchart TD
-    A["User: 'CSE faculty with PhD'"] --> B["Groq LLM: Classify + Generate SQL"]
-    B --> C{SQL or NOT_SQL?}
-    C -->|SQL| D["Execute on faculty.db\n(faculty or former_people table)"]
-    D --> E{Success?}
-    E -->|Yes| F["Format as markdown table"]
-    E -->|No| G["Fallback to RAG pipeline"]
-    C -->|NOT_SQL| G
-    F --> H["Return structured answer"]
-    G --> I["Normal hybrid retrieval → LLM"]
+  A["User Query"] --> A1{Single student name pattern?}
+  A1 -->|Yes| A2["Direct student SQL lookup"]
+  A1 -->|No| B["Groq LLM: Classify + Generate SQL"]
+  B --> C{SQL or NOT_SQL?}
+  C -->|SQL| D["Execute on faculty.db\n(faculty / former_people / students + interests)"]
+  D --> E{Success?}
+  E -->|Yes| F["Format SQL output\n(profile or table)"]
+  E -->|No| G["Fallback to RAG pipeline"]
+  C -->|NOT_SQL| G
+  A2 --> F
+  F --> H["Return structured answer"]
+  G --> I["Normal hybrid retrieval → LLM"]
 ```
 
-### How the Faculty Database is Built
+### How the Shared Database is Built
 
-`faculty_db.py` parses the raw `data.txt` and extracts faculty data from two sources:
+`faculty_db.py` parses raw `data.txt` and builds faculty + former people tables, then invokes `student_db.py` to load student profiles/interests from `students.csv` into the same `faculty.db`.
 
 1. **Individual Profile Chunks** (106 profiles) — Chunks containing "Back to Faculty Directory" with full biographical data
 2. **Listing Page Entries** (4 additional) — Faculty who appear on department listing pages but don't have individual profiles
 3. **Former People** (52 records) — Past office-bearers parsed from the "Former People" section into a separate `former_people` table
+4. **Students CSV** — Student profiles normalized into `students`, `interests`, and `student_interests`
 
 ```mermaid
 flowchart TD
     A[data.txt - 785 raw chunks] --> B[Parse individual profiles]
     A --> C[Parse listing pages]
     A --> FP[Parse former people section]
+  SCSV[students.csv] --> ST[Normalize + canonicalize interests]
     B --> D[106 faculty records]
     C --> E[4 additional records]
     FP --> FPR[52 former people records]
@@ -699,8 +728,10 @@ flowchart TD
     E --> F
     F --> G["faculty table — 110 records, 16 columns"]
     FPR --> H["former_people table — 52 records, 4 columns"]
+  ST --> ST2["students + interests + student_interests"]
     G --> I[faculty.db]
     H --> I
+  ST2 --> I
 ```
 
 **Faculty Table Schema** (16 columns):

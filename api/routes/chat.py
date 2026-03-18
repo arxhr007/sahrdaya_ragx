@@ -110,6 +110,15 @@ async def _invoke_with_key_failover(coro_factory):
 
 
 async def _classify_sql(question: str, history_text: str) -> tuple[str | None, str]:
+    # Keep API behavior aligned with CLI:
+    # 1) direct student single-name lookup SQL, 2) hard gate for bulk SQL intents.
+    direct_student_sql = rag_setup._student_single_lookup_sql(question)
+    if direct_student_sql:
+        return direct_student_sql, ""
+
+    if not rag_setup._is_bulk_entity_query(question):
+        return None, ""
+
     trimmed_history = history_text[-rag_setup._SQL_HISTORY_LIMIT:] if history_text else ""
 
     async def _runner(key: str):

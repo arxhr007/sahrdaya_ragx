@@ -19,6 +19,8 @@ import time
 import sqlite3
 from sentence_transformers import CrossEncoder
 
+from student_db import ensure_student_data
+
 # ============ QUERY EXPANSION ============
 
 _QUERY_EXPANSIONS = {
@@ -320,6 +322,18 @@ else:
         _conn.close()
         print(f"[*] Faculty SQL database loaded ({_cnt} faculty + {_fcnt} former people)")
 
+# Ensure student tables/data exist in the same faculty.db file.
+_student_stats = ensure_student_data(FACULTY_DB)
+_conn = sqlite3.connect(FACULTY_DB)
+_scnt = _conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+_icnt = _conn.execute("SELECT COUNT(*) FROM interests").fetchone()[0]
+_sicnt = _conn.execute("SELECT COUNT(*) FROM student_interests").fetchone()[0]
+_conn.close()
+if _student_stats.get("csv_found"):
+    print(f"[*] Student data loaded ({_scnt} students, {_icnt} canonical interests, {_sicnt} links)")
+else:
+    print("[*] students.csv not found — student tables ready (0 rows loaded)")
+
 # ── Schema description for LLM ──────────────────────────────────────────────────
 
 _FACULTY_SCHEMA = """
@@ -351,6 +365,31 @@ COLUMNS:
   start_year INTEGER     -- year they started the role
   end_year   INTEGER     -- year they ended the role
 
+TABLE 3: students  (student profiles from students.csv)
+COLUMNS:
+    id                 INTEGER PRIMARY KEY
+    timestamp          TEXT        -- form submission timestamp
+    name               TEXT        -- student's full name
+    year_of_graduation INTEGER     -- graduation year (e.g., 2027)
+    department         TEXT        -- normalized department name
+    bio                TEXT        -- short bio
+    photo_url          TEXT        -- photo URL
+    instagram_username TEXT        -- instagram username
+    github_url         TEXT        -- github URL
+    projects_links     TEXT        -- comma-separated project links
+    linkedin_url       TEXT        -- linkedin URL
+    personal_website   TEXT        -- personal website URL
+
+TABLE 4: interests  (canonical interests dictionary)
+COLUMNS:
+    id             INTEGER PRIMARY KEY
+    canonical_name TEXT        -- standardized token (e.g., 'chess', 'machine learning')
+
+TABLE 5: student_interests  (many-to-many student-interest links)
+COLUMNS:
+    student_id     INTEGER
+    interest_id    INTEGER
+
 DEPARTMENT ALIASES (for faculty table):
   cse, cs       -> 'Computer Science Engineering'
   ece           -> 'Electronics and Communication Engineering'
@@ -366,24 +405,34 @@ IMPORTANT NOTES:
   - For PhD queries: use has_phd = 1 for completed, phd_pursuing = 1 for pursuing
   - For HODs: WHERE designation LIKE '%Head%Department%'
   - For FORMER/PAST people: query the former_people table, use exact role match (role = 'Principal'), NOT LIKE
+    - For student-interest queries, use JOINs across students + student_interests + interests
+    - Interest matching should use canonical_name and exact equality where possible
+        Example: WHERE interests.canonical_name = 'chess'
+    - Department + interest combined example:
+        SELECT students.name, students.department
+        FROM students
+        JOIN student_interests ON student_interests.student_id = students.id
+        JOIN interests ON interests.id = student_interests.interest_id
+        WHERE students.department LIKE '%Computer Science Engineering%'
+            AND interests.canonical_name = 'chess'
+        ORDER BY students.name
   - A question about "former Principals" → SELECT * FROM former_people WHERE role = 'Principal'
   - A question about "former Vice Principals" → SELECT * FROM former_people WHERE role = 'Vice Principal'
   - A question about "all former people" → SELECT * FROM former_people ORDER BY role, start_year
-  - Always ORDER BY name (faculty) or role, start_year (former_people) for consistent output
+    - Always ORDER BY students.name (students), name (faculty), or role, start_year (former_people) for consistent output
   - Use COUNT(*) for "how many" questions
   - Keep queries SELECT-only (read-only)
-  - NEVER query the faculty table for former/past/previous people — use former_people
+    - NEVER query the faculty table for former/past/previous people — use former_people
 """
 
 # ── SQL classification + generation prompt ───────────────────────────────────────
 
 _SQL_CLASSIFY_PROMPT = ChatPromptTemplate.from_template(
-"""You are a query classifier for a college faculty database.
+"""You are a query classifier for a college database.
 
-Given a user question, decide if it should be answered by querying the faculty SQL database.
+Given a user question, decide if it should be answered by querying the SQL database.
 
-The database contains ONLY faculty/staff information: names, departments, designations (roles),
-PhD status, experience, publications, awards, patents, books, research areas, education, memberships.
+The database contains faculty/staff info, former people history, and student profile+interest data.
 
 IMPORTANT — Use SQL ONLY for BULK/LIST queries that need to retrieve or filter MULTIPLE faculty members.
 
@@ -394,7 +443,9 @@ Generate SQL for these types of queries:
 - "faculty pursuing PhD in CSE" → filtered lists from faculty
 - "list all former Principals" / "previous Managers" / "past Directors" → SELECT from former_people table
 - "who were the former Vice Principals" / "all former people" → SELECT from former_people table
-- ANY query asking for a LIST, ALL, COUNT, or FILTERED SET of faculty OR former people
+- "list all students" / "students in CSE" / "students graduating in 2027" → SELECT from students table
+- "students interested in chess" / "students interested in machine learning" → JOIN students + student_interests + interests
+- ANY query asking for a LIST, ALL, COUNT, or FILTERED SET of faculty, former people, OR students
 
 Respond NOT_SQL for these (let the RAG chatbot handle them naturally):
 - "who is the HOD of CSE" / "who is the principal" → asking about ONE specific person
@@ -404,6 +455,7 @@ Respond NOT_SQL for these (let the RAG chatbot handle them naturally):
 
 Key distinction: "who is the HOD of CSE" = NOT_SQL (single person). "list all HODs" = SQL (multiple people).
 Key distinction: "former Principals" = SQL (from former_people table). "current Principal" = NOT_SQL (single person).
+Key distinction: "students interested in chess" = SQL (bulk/filter set). "tell me about student X" = NOT_SQL.
 
 Rules:
 - ONLY generate SELECT statements. Never INSERT/UPDATE/DELETE.
@@ -425,8 +477,70 @@ _sql_classify_chain = _SQL_CLASSIFY_PROMPT | llm | StrOutputParser()
 _SQL_HISTORY_LIMIT = 1500
 
 
-def _is_bulk_faculty_or_former_query(question: str) -> bool:
-    """Gate SQL usage to explicit BULK faculty/former-people intents only.
+def _normalize_name_for_match(text: str) -> str:
+    """Normalize person names for tolerant exact matching."""
+    value = (text or "").strip().lower()
+    value = re.sub(r"[^a-z0-9\s]", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _extract_person_name_candidate(question: str) -> str | None:
+    """Extract potential person name from single-person query phrasing."""
+    q = (question or "").strip()
+    patterns = [
+        r"^\s*who\s+is\s+(.+?)\s*\??\s*$",
+        r"^\s*who\s+is\s+student\s+(.+?)\s*\??\s*$",
+        r"^\s*tell\s+me\s+about\s+(.+?)\s*\??\s*$",
+        r"^\s*details\s+about\s+(.+?)\s*\??\s*$",
+        r"^\s*info(?:rmation)?\s+about\s+(.+?)\s*\??\s*$",
+    ]
+    for pat in patterns:
+        m = re.match(pat, q, flags=re.IGNORECASE)
+        if m:
+            cand = _normalize_name_for_match(m.group(1))
+            return cand if cand else None
+    return None
+
+
+def _student_single_lookup_sql(question: str) -> str | None:
+    """Return a direct SQL query for single-student lookup if name matches."""
+    candidate = _extract_person_name_candidate(question)
+    if not candidate:
+        return None
+
+    try:
+        conn = sqlite3.connect(FACULTY_DB)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM students")
+        rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        return None
+
+    matched_name = None
+    for (name,) in rows:
+        normalized = _normalize_name_for_match(name)
+        words = normalized.split()
+        # Match if candidate is exact match OR matches as a word in the name
+        if candidate == normalized or candidate in words:
+            matched_name = name
+            break
+
+    if not matched_name:
+        return None
+
+    # Keep this deterministic and safe: exact match on resolved canonical name.
+    escaped = matched_name.replace("'", "''")
+    return (
+        "SELECT name, year_of_graduation, department, bio, photo_url, instagram_username, "
+        "github_url, projects_links, linkedin_url, personal_website "
+        f"FROM students WHERE name = '{escaped}' ORDER BY name"
+    )
+
+
+def _is_bulk_entity_query(question: str) -> bool:
+    """Gate SQL usage to explicit BULK faculty/former-people/student intents only.
 
     This prevents broad department questions (e.g., "what are things in CSE")
     from being routed to SQL.
@@ -442,8 +556,19 @@ def _is_bulk_faculty_or_former_query(question: str) -> bool:
         r"\bhow many\b",
         r"\bcount\b",
         r"\bwho are\b",
+        r"\bwho likes\b",
+        r"\bwho like\b",
+        r"\blikes?\b",
         r"\bfaculty with\b",
         r"\bfaculties with\b",
+        r"\bstudents?\s+with\b",
+        r"\bstudents?\s+interested\s+in\b",
+        r"\binterested\s+in\b",
+        r"\bpeople\s+with\b",
+        r"\bpeople\s+interested\s+in\b",
+        r"\bwho\s+interested\s+in\b",
+        r"\bgraduating\b",
+        r"\bgraduates\b",
         r"\bformer\b",
         r"\bpast\b",
         r"\bprevious\b",
@@ -462,6 +587,14 @@ def _is_bulk_faculty_or_former_query(question: str) -> bool:
         r"\bteachers\b",
         r"\bstaff\b",
         r"\bhods\b",
+        r"\bstudent\b",
+        r"\bstudents\b",
+        r"\bpeople\b",
+        r"\bperson\b",
+        r"\binterest\b",
+        r"\binterests\b",
+        r"\bgraduation\b",
+        r"\bgraduating\b",
         r"\bformer\b",
         r"\bpast\b",
         r"\bprevious\b",
@@ -477,8 +610,13 @@ def _is_bulk_faculty_or_former_query(question: str) -> bool:
 
 def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str | None:
     """Ask the LLM if this question needs SQL. Returns SQL string or None."""
-    # Hard gate: only attempt SQL for explicit bulk faculty/former-people asks.
-    if not _is_bulk_faculty_or_former_query(question):
+    # Fast path: explicit single-person student lookups should not depend on RAG.
+    direct_student_sql = _student_single_lookup_sql(question)
+    if direct_student_sql:
+        return direct_student_sql
+
+    # Hard gate: only attempt SQL for explicit bulk faculty/former/student asks.
+    if not _is_bulk_entity_query(question):
         return None
 
     # Truncate history to avoid blowing the token limit — the classifier
@@ -527,6 +665,45 @@ def _get_former_columns() -> set[str]:
         return set()
 
 
+def _get_students_columns() -> set[str]:
+    """Return the set of column names in the students table."""
+    try:
+        conn = sqlite3.connect(FACULTY_DB)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(students)")
+        cols = {row[1] for row in cur.fetchall()}
+        conn.close()
+        return cols
+    except Exception:
+        return set()
+
+
+def _get_interests_columns() -> set[str]:
+    """Return the set of column names in the interests table."""
+    try:
+        conn = sqlite3.connect(FACULTY_DB)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(interests)")
+        cols = {row[1] for row in cur.fetchall()}
+        conn.close()
+        return cols
+    except Exception:
+        return set()
+
+
+def _get_student_interests_columns() -> set[str]:
+    """Return the set of column names in the student_interests table."""
+    try:
+        conn = sqlite3.connect(FACULTY_DB)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(student_interests)")
+        cols = {row[1] for row in cur.fetchall()}
+        conn.close()
+        return cols
+    except Exception:
+        return set()
+
+
 def validate_faculty_sql(sql: str) -> bool:
     """Check that all columns referenced in the SQL actually exist in the target table(s).
     Returns True if valid, False if any referenced column is not in the schema."""
@@ -535,7 +712,15 @@ def validate_faculty_sql(sql: str) -> bool:
     valid_cols = set()
     if 'FORMER_PEOPLE' in sql_upper:
         valid_cols |= _get_former_columns()
-    if 'FACULTY' in sql_upper or 'FORMER_PEOPLE' not in sql_upper:
+    if 'STUDENTS' in sql_upper:
+        valid_cols |= _get_students_columns()
+    if 'INTERESTS' in sql_upper:
+        valid_cols |= _get_interests_columns()
+    if 'STUDENT_INTERESTS' in sql_upper:
+        valid_cols |= _get_student_interests_columns()
+    if 'FACULTY' in sql_upper:
+        valid_cols |= _get_faculty_columns()
+    if not any(t in sql_upper for t in ['FACULTY', 'FORMER_PEOPLE', 'STUDENTS', 'INTERESTS', 'STUDENT_INTERESTS']):
         valid_cols |= _get_faculty_columns()
     if not valid_cols:
         return False
@@ -553,7 +738,7 @@ def validate_faculty_sql(sql: str) -> bool:
         'MIN', 'MAX', 'UPPER', 'LOWER', 'LENGTH', 'SUBSTR', 'TRIM', 'REPLACE',
         'COALESCE', 'IFNULL', 'NULLIF', 'TYPEOF', 'TOTAL', 'ABS', 'ROUND',
         'INTEGER', 'TEXT', 'REAL', 'BLOB', 'PRIMARY', 'KEY', 'AUTOINCREMENT',
-        'TABLE', 'FACULTY', 'FORMER_PEOPLE', 'TRUE', 'FALSE',
+        'TABLE', 'FACULTY', 'FORMER_PEOPLE', 'STUDENTS', 'INTERESTS', 'STUDENT_INTERESTS', 'TRUE', 'FALSE',
     }
     tokens = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', cleaned)
     for tok in tokens:
@@ -592,6 +777,42 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
     if len(columns) == 1 and len(rows) == 1 and isinstance(rows[0][0], (int, float)):
         col = columns[0].replace("_", " ").title()
         return f"**{col}: {rows[0][0]}**"
+
+    # Student single-profile output is easier to read as labeled fields.
+    student_profile_cols = {
+        "name",
+        "year_of_graduation",
+        "department",
+        "bio",
+        "photo_url",
+        "instagram_username",
+        "github_url",
+        "projects_links",
+        "linkedin_url",
+        "personal_website",
+    }
+    if len(rows) == 1 and student_profile_cols.issuperset({c.lower() for c in columns}):
+        label_map = {
+            "name": "Name",
+            "year_of_graduation": "Graduation Year",
+            "department": "Department",
+            "bio": "Bio",
+            "photo_url": "Photo",
+            "instagram_username": "Instagram",
+            "github_url": "GitHub",
+            "projects_links": "Projects",
+            "linkedin_url": "LinkedIn",
+            "personal_website": "Website",
+        }
+        pairs = []
+        row = rows[0]
+        for i, value in enumerate(row):
+            if value is None or str(value).strip() == "":
+                continue
+            key = columns[i].lower()
+            label = label_map.get(key, columns[i].replace("_", " ").title())
+            pairs.append(f"- **{label}:** {value}")
+        return "\n".join(pairs)
 
     # Table output
     # Clean column names for display

@@ -80,8 +80,10 @@ flowchart TD
         FP -->|"10 role chunks<br/>+ summary"| H
         E -->|"regex<br/>parsing"| I["👤 Faculty<br/>Extractor"]
         E -->|"former people<br/>parsing"| IP["👥 Former People<br/>Parser"]
+        STCSV["🧾 students.csv"] --> STING["👩‍🎓 student_db.py<br/>Normalizer + Loader"]
         I -->|"110 profiles<br/>16 columns"| K["🗃️ SQLite DB<br/>faculty.db"]
         IP -->|"52 records<br/>10 roles"| K
+        STING -->|"students + interests + links<br/>incl. photo/projects"| K
     end
 
     subgraph INDEX["📊 Dual Index Layer"]
@@ -96,13 +98,16 @@ flowchart TD
 
     subgraph RUNTIME["❓ Query Runtime"]
         R(["🧑 User<br/>Query"]) --> S["📝 Chat<br/>History"]
+        R --> SF["👤 Student Name<br/>Fast Path"]
+        SF -->|"match"| V
+        SF -->|"no match"| T
         S --> T{"🧠 LLM<br/>Classifier"}
 
         subgraph SQL["📊 SQL Path"]
-            T -->|"bulk / aggregate /<br/>former people"| U["🔧 Schema-Aware<br/>SQL Generator"]
+            T -->|"bulk / aggregate /<br/>faculty + former + students"| U["🔧 Schema-Aware<br/>SQL Generator"]
             K --> U
             U -->|"SELECT only<br/>safety filter"| V["⚡ SQLite<br/>Executor"]
-            V --> W["📋 Markdown<br/>Table"]
+            V --> W["📋 Formatted SQL<br/>Result"]
             V -->|"error"| X["🔄 Fallback<br/>to RAG"]
         end
 
@@ -146,9 +151,11 @@ flowchart TD
 | `data.txt` | Raw scraped chunks (TSV: `chunk_id\tcontent`) |
 | `preprocess_data.py` | Cleans, categorises (18 categories), sentence-splits, injects search aliases, and structures former people data |
 | `data_cleaned.jsonl` | Optimised chunks ready for indexing |
-| `faculty_db.py` | Parses faculty profiles from raw data, builds SQLite database (110 records, 16 columns) |
-| `faculty.db` | SQLite faculty database (auto-generated) |
-| `rag_setup.py` | Builds FAISS + BM25 indexes (with cache), SQL classifier, LLM chain, hybrid retrieval |
+| `faculty_db.py` | Builds `faculty` + `former_people` tables and coordinates student ingestion into the same DB |
+| `student_db.py` | Loads `students.csv`, normalizes interests, and populates `students`, `interests`, `student_interests` |
+| `students.csv` | Student source data (bio/biography, interests, photo URL, social links, projects links) |
+| `faculty.db` | Shared SQLite database for faculty, former people, students, and canonical interests |
+| `rag_setup.py` | Builds FAISS + BM25 indexes, routes SQL vs RAG, includes single-student fast lookup, and formats SQL output |
 | `main.py` | Interactive CLI chatbot with stats, ASCII dashboard, and session analytics |
 | `api/` | FastAPI app split into `core`, `routes`, and `services` layers |
 | `api_main.py` | API entrypoint (Uvicorn) |
@@ -242,6 +249,9 @@ python main.py
 On first run, FAISS and BM25 indexes are built from `data_cleaned.jsonl` (~50s). Subsequent runs load from `.index_cache/` in ~0.1s. The cache auto-invalidates when the data file changes (MD5 hash check).
 
 If `faculty.db` doesn't exist, it's auto-built from `data.txt` on startup.
+Student data from `students.csv` is also loaded at startup into `students`, `interests`, and `student_interests` in the same DB.
+
+Student profile SQL output includes: name, graduation year, department, bio, photo URL, Instagram, GitHub, projects links, LinkedIn, and website.
 
 ### Step 4 — Run the FastAPI chatbot server
 
@@ -406,6 +416,8 @@ ragx-backend/
 ├── preprocess_data.py      # Data preprocessing pipeline
 ├── data_cleaned.jsonl      # Processed chunks (generated)
 ├── faculty_db.py           # Faculty data parser → SQLite DB builder
+├── student_db.py           # Student CSV loader + interest normalization
+├── students.csv            # Student profile source data
 ├── faculty.db              # SQLite faculty database (auto-generated)
 ├── rag_setup.py            # RAG engine (indexes, chains, SQL classifier)
 ├── main.py                 # CLI chatbot with session analytics
