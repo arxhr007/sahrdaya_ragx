@@ -5,6 +5,8 @@ A Retrieval-Augmented Generation (RAG) chatbot backend for **Sahrdaya College of
 > **📚 Want to learn how it works?** Check [WORKING.md](WORKING.md) for a complete technical breakdown of the RAG pipeline: scraping, preprocessing, hybrid retrieval (BM25 + Vector), SQL routing, index caching, and answer generation.
 >
 > **🚀 What's planned next?** See [FUTURE_ADDITIONS.md](FUTURE_ADDITIONS.md) for the roadmap: streaming responses, Docker, web frontend, and more.
+>
+> **🧩 Connecting a frontend?** See [FRONTEND_INTEGRATION.md](FRONTEND_INTEGRATION.md) for API payloads, session flow, streaming examples, and frontend integration patterns.
 
 ## Quick Run
 
@@ -14,16 +16,55 @@ cd ragx-backend
 pip install -r requirements.txt
 ```
 
-Add your Groq API key in `rag_setup.py` (line ~169, `groq_api_key="..."`) and `scraper.py` (line ~50, `GROQ_API_KEY`), then:
+Copy environment template and add your Groq key(s):
 
 ```bash
-python main.py
+copy .env.example .env
+```
+
+Then start API server:
+
+```bash
+python api_main.py
+```
+
+Or start the load-balanced Docker stack:
+
+```bash
+docker compose -f docker-compose.nginx.yml up --build -d
 ```
 
 ## Full Architecture
 
+### Combined RAG + API + Deployment Architecture
+
 ```mermaid
 flowchart TD
+    subgraph DEPLOY["🚢 Deployment Layer"]
+        FE["🌐 Frontend Client"] --> LB["⚖️ Nginx LB :8080"]
+        CFG["docker-compose.nginx.yml + .env"] --> API1["🐳 rag-api-1"]
+        CFG --> API2["🐳 rag-api-2"]
+        CFG --> API3["🐳 rag-api-3"]
+        API1 --> LB
+        API2 --> LB
+        API3 --> LB
+        HC["Healthchecks gate traffic"] --> LB
+        LB --> CHAT["POST /api/chat\nPOST /api/chat/stream"]
+        LB --> OPS["GET /api/health /ready /load /limits"]
+        ERR["502/429/503"] --> RETRY["Client retry + backoff"]
+    end
+
+    subgraph API["🧩 FastAPI Runtime Layer"]
+        CHAT --> SS["In-memory Session Store"]
+        CHAT --> RL["Local Rate + Load Guardrails"]
+        CHAT --> KP["Busy-key Failover Pool"]
+        SS --> R
+        RL --> R
+        KP --> R
+        OPS --> OBS["Metrics + status endpoints"]
+        OBS --> ERR
+    end
+
     subgraph INGESTION["🕷️ Data Ingestion Layer"]
         A["🌐 sahrdaya.ac.in"] -->|"sitemap<br/>discovery"| B["🗺️ URL Queue"]
         B -->|"4 threads"| C["🎭 Playwright<br/>Renderer"]
@@ -92,6 +133,8 @@ flowchart TD
     style ETL fill:none,stroke:#22c55e,stroke-width:2px
     style INDEX fill:none,stroke:#a855f7,stroke-width:2px
     style RUNTIME fill:none,stroke:#f97316,stroke-width:2px
+    style API fill:none,stroke:#ff7f50,stroke-width:2px
+    style DEPLOY fill:none,stroke:#7b61ff,stroke-width:2px
     style SQL fill:none,stroke:#ef4444,stroke-width:1px,stroke-dasharray: 5 5
     style RAG fill:none,stroke:#06b6d4,stroke-width:1px,stroke-dasharray: 5 5
     style OUTPUT fill:none,stroke:#eab308,stroke-width:2px
@@ -107,11 +150,18 @@ flowchart TD
 | `faculty.db` | SQLite faculty database (auto-generated) |
 | `rag_setup.py` | Builds FAISS + BM25 indexes (with cache), SQL classifier, LLM chain, hybrid retrieval |
 | `main.py` | Interactive CLI chatbot with stats, ASCII dashboard, and session analytics |
+| `api/` | FastAPI app split into `core`, `routes`, and `services` layers |
+| `api_main.py` | API entrypoint (Uvicorn) |
+| `.env` / `.env.example` | Runtime settings (keys, limits, CORS, concurrency) |
+| `Dockerfile` | Container image for API service |
+| `docker-compose.yml` | Single-container deployment |
+| `docker-compose.nginx.yml` | 3 API containers + Nginx load balancing |
+| `deploy/nginx-docker.conf` | Nginx upstream/load-balancer config for Docker |
 
 ## Prerequisites
 
 - **Python 3.10+** (tested on 3.14)
-- A **Groq API key** (currently set inside `rag_setup.py` and `scraper.py` — should be moved to env var, see [FUTURE_ADDITIONS.md](FUTURE_ADDITIONS.md))
+- A **Groq API key** set via `.env` (`GROQ_API_KEY` or `GROQ_API_KEYS`)
 - ~500 MB disk space for embeddings model download on first run
 - **Playwright** browsers (only needed for scraping): `playwright install`
 
@@ -193,6 +243,87 @@ On first run, FAISS and BM25 indexes are built from `data_cleaned.jsonl` (~50s).
 
 If `faculty.db` doesn't exist, it's auto-built from `data.txt` on startup.
 
+### Step 4 — Run the FastAPI chatbot server
+
+Copy environment template and add your keys:
+
+```bash
+copy .env.example .env
+```
+
+Then start API server:
+
+```bash
+python api_main.py
+```
+
+API endpoints:
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/chat` | POST | Chat request-response API |
+| `/api/chat/stream` | POST | SSE streaming events |
+| `/api/sessions` | POST | Create new chat session |
+| `/api/sessions/{session_id}/history` | GET | Get session chat history |
+| `/api/sessions/{session_id}` | DELETE | Delete session |
+| `/api/health` | GET | Liveness check |
+| `/api/ready` | GET | Readiness check |
+| `/api/load` | GET | Current in-flight load |
+| `/api/limits` | GET | Local quota usage + key health |
+
+The API includes:
+- in-memory session isolation
+- busy-key failover (switch to next key if one key is rate-limited)
+- local quota guardrails for RPM/TPM/RPD/TPD
+- full-answer policy (no API-side output truncation; continuation attempts if model stops due length)
+
+### Step 5 — Run with Docker (recommended for different computers)
+
+#### Option A: Single API container
+
+```bash
+docker compose up --build -d
+```
+
+Access API at:
+
+```text
+http://127.0.0.1:8000
+```
+
+Useful commands:
+
+```bash
+docker compose logs -f rag-api
+docker compose down
+```
+
+#### Option B: Nginx + 3 API containers (local load balancing)
+
+```bash
+docker compose -f docker-compose.nginx.yml up --build -d
+```
+
+Access API through Nginx at:
+
+```text
+http://127.0.0.1:8080
+```
+
+Useful commands:
+
+```bash
+docker compose -f docker-compose.nginx.yml logs -f
+docker compose -f docker-compose.nginx.yml down
+```
+
+Docker files added:
+- `Dockerfile`
+- `.dockerignore`
+- `docker-compose.yml`
+- `docker-compose.nginx.yml`
+- `deploy/nginx-docker.conf`
+
 ## CLI Commands
 
 | Command | Description |
@@ -218,6 +349,29 @@ ragx-backend/
 ├── faculty.db              # SQLite faculty database (auto-generated)
 ├── rag_setup.py            # RAG engine (indexes, chains, SQL classifier)
 ├── main.py                 # CLI chatbot with session analytics
+├── api/
+│   ├── app.py              # FastAPI app bootstrap + middleware wiring
+│   ├── core/
+│   │   ├── models.py       # Pydantic request/response schemas
+│   │   └── settings.py     # Environment-backed configuration
+│   ├── routes/
+│   │   └── chat.py         # API endpoints (/api/chat, sessions, health)
+│   └── services/
+│       ├── key_pool.py     # Busy-key failover state
+│       ├── load_control.py # Concurrency and queue controls
+│       ├── rate_limit_manager.py # Local RPM/TPM/RPD/TPD budget tracking
+│       └── session_store.py # In-memory session memory with TTL
+├── api_main.py             # Uvicorn run entrypoint
+├── .env.example            # Environment template
+├── Dockerfile              # Docker image build
+├── docker-compose.yml      # Single API deployment
+├── docker-compose.nginx.yml # Nginx + 3 API replicas
+├── deploy/
+│   ├── nginx.conf          # Bare-metal/local nginx config
+│   └── nginx-docker.conf   # Docker nginx config
+├── FRONTEND_INTEGRATION.md # Frontend integration guide
+├── tests/
+│   └── test_api.py         # API tests
 ├── requirements.txt        # Python dependencies
 ├── .index_cache/           # Cached FAISS + BM25 indexes (auto-generated)
 │   ├── faiss/              # FAISS vector index
@@ -240,6 +394,11 @@ ragx-backend/
 | BM25:Vector weights | 0.6:0.4 | `rag_setup.py` | BM25 weighted higher for keyword queries |
 | Max context | 22,000 chars (~6K tokens) | `rag_setup.py` | Truncates retrieved chunks to fit |
 | SQL history limit | 1,500 chars | `rag_setup.py` | Caps history sent to SQL classifier |
+| API host/port | `0.0.0.0:8000` | `.env` | Controlled by `API_HOST`, `API_PORT` |
+| API concurrency | `4` | `.env` | `MAX_CONCURRENT_REQUESTS` for load control |
+| Queue wait timeout | `20s` | `.env` | `QUEUE_WAIT_SECONDS` before busy response |
+| Key failover | Enabled | `.env` + `api/services/key_pool.py` | Uses `GROQ_API_KEYS` pool with cooldown |
+| Local quota guardrails | RPM/TPM/RPD/TPD | `.env` + `api/services/rate_limit_manager.py` | Protects service before upstream limits |
 
 ## License
 

@@ -1,0 +1,900 @@
+\documentclass[12pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{mathptmx}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{wrapfig}
+\usepackage{booktabs}
+\usepackage{rotating}
+\usepackage{lscape}
+\usepackage{longtable}
+\usepackage{multirow,bigstrut}
+\usepackage{graphicx}
+\usepackage{times}
+\usepackage{tocloft}
+\usepackage{fancybox}
+\usepackage[a4paper,bindingoffset=0.2in,%
+            left=1.5in,right=1in,top=1in,bottom=1in,%
+            footskip=.25in]{geometry}
+\usepackage[pagestyles]{titlesec}
+\usepackage{setspace}
+\usepackage{sectsty}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{amsthm}
+\usepackage{pdfpages}
+\usepackage{algorithm}
+\usepackage{algpseudocode,algorithm}
+\usepackage[section]{placeins}
+\captionsetup[table]{labelsep=space}
+%\captionsetup[table]{skip=-4pt}
+\setlength{\belowcaptionskip}{-6pt}
+\captionsetup[figure]{skip=-4pt}
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{}
+%%%%% Header part - Type your seminar title here %%%%%%%%%%%%
+\rhead{\fontsize{8}{12} \selectfont Enhanced Pharmaceutical Supply Chain Management using Ethereum Blockchain}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\rfoot{\fontsize{8}{12} \selectfont \thepage}
+\lfoot{\fontsize{8}{12} \selectfont Sahrdaya College of Engineering \& Technology, Kodakara }
+\setlist{nosep}
+\renewcommand{\footrulewidth}{}
+\renewcommand{\headrulewidth}{}
+\sectionfont{\fontsize{12}{15}\MakeUppercase\selectfont}
+\subsectionfont{\normalfont\fontsize{12}{15}\selectfont}
+\subsubsectionfont{\normalfont\fontsize{12}{15}\selectfont}
+\parindent=0cm
+\renewcommand{\cfttoctitlefont}{\normalfont\normalsize\bfseries\MakeUppercase}
+\renewcommand{\cftloftitlefont}{\normalfont\normalsize\bfseries\MakeUppercase}
+\renewcommand{\cftlottitlefont}{\normalfont\normalsize\bfseries\MakeUppercase}
+
+\sectionfont{\fontsize{12}{15}}
+\sectionfont{\MakeUppercase}
+
+%\numberwithin{figure}{section}
+%\numberwithin{table}{section}
+
+\titleformat{\chapter}[display]
+{\normalfont\huge\bfseries\centering}{\centering\chaptertitlename\ \thechapter}{14pt}{\huge}
+\titlespacing*{\chapter}
+{0pt}{50pt}{40pt}
+ 
+\newpagestyle{mystyle}{\sethead{}{}{}\setfoot{}{\thepage}{}}
+\pagestyle{mystyle}
+
+
+
+
+
+\begin{document}
+\pagenumbering{roman}
+\renewcommand\bibname{REFERENCES}
+\renewcommand*{\thepage}{\footnotesize\roman{page}} % For Roman Page No
+\renewcommand{\figurename}{Fig.}
+
+
+
+
+%%%%%%%%%%%COVER PAGE %%%%%%%%%%%%%%%%%%%%%
+\begin{titlepage}
+\newgeometry{left=1in,right=1in,top=1in,bottom=1in}
+\begin{center}
+\onehalfspacing
+{\fontsize{18}{19}\selectfont \textbf{ENHANCED PHARMACEUTICAL SUPPLY CHAIN MANAGEMENT USING ETHEREUM BLOCKCHAIN\\}} %CAPITAL LETTERS
+ %CAPITAL LETTERS
+\vspace{1.2 cm}
+{\fontsize{16}{14}\selectfont A PROJECT REPORT}\\
+\vspace{0.6 cm}
+\onehalfspacing
+{\fontsize{14}{16}\selectfont Submitted by}	\\
+
+\vspace{1 cm}
+{\fontsize{16}{14}\selectfont \textbf{AKASH T M}}
+{\fontsize{16}{14}\selectfont \textbf{(SHR17CS014)}}\\
+\vspace{1 cm}
+
+to\\
+\vspace{0.5 cm}
+{\fontsize{14}{14}\selectfont the APJ Abdul Kalam Technological University\\ 
+\vspace{0.3cm}in partial fulfillment of the requirements for the award of the Degree}\\
+\vspace{0.5 cm}
+of\\
+\vspace{0.5 cm}
+{\fontsize{14}{14}\selectfont \textit{Bachelor of Technology}\\ \textit{in}\\\textit{Computer Science and Engineering} }\\
+\vspace{1 cm}
+
+\onehalfspacing
+
+\begin{figure}[hbtp]
+
+\centering
+\includegraphics[scale=1.2]{sahrdaya_logo.png}
+\end{figure}
+\vspace{1.5 cm}
+\onehalfspacing
+{\fontsize{16}{14}\selectfont \textbf{Department of Computer Science and Engineering}\\
+\vspace{0.2cm}
+SAHRDAYA COLLEGE OF ENGINEERING AND TECHNOLOGY\\
+\vspace{0.2cm}
+KODAKARA, THRISSUR - 680684}\\
+
+
+
+
+\vspace{0.5cm}
+{\fontsize{14}{16}\selectfont{\upshape JANUARY  2021}}
+\end{center}
+\end{titlepage}
+
+
+
+
+%%%%%%%%%%%%%%%%CERTIFICATE%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{titlepage}
+\newgeometry{left=1in,right=1in,top=1in,bottom=1in}
+\onehalfspacing
+\begin{center}
+{\fontsize{16}{10}\selectfont\textbf{DECLARATION}}\\
+
+\end{center}
+
+
+\onehalfspacing
+We, undersigned, hereby declare that the project report “Enhanced Pharmaceutical Supply Chain Management Using Ethereum Blockchain”, submitted for
+partial fulfillment of the requirements for the award of degree of Bachelor of
+Technology of the APJ Abdul Kalam Technological University, Kerala is a bonafide
+work done by us under the guidance of Mr. Shyam Krishna K, Department of Computer Science
+Engineering. This submission represents our ideas in our own words and where ideas
+or words of others have been included; We have adequately and accurately cited and
+referenced the original sources. We also declare that we have adhered to the ethics of
+academic honesty and integrity and have not misrepresented or fabricated any data or
+idea or fact or source in our submission. We understand that any violation of the above
+will be a cause for disciplinary action by the institute and/or the University and can
+also evoke penal action from the sources which have thus not been properly cited or
+from whom proper permission has not been obtained. This report has not been
+previously formed the basis for the award of any degree, diploma or similar title of
+any other University.
+
+\begin{center}
+
+%\begin{tabular}{lcr}
+%SEMINAR GUIDE & COORDINATOR  &  HEAD OF THE DEPARTMENT\\
+%  NAME& NAME  & Mr. Krishnadas J \\
+%Academic Designation &  Academic Designation & Academic Designation \\
+ 
+% &   &  \\
+
+%\end{tabular}
+
+
+
+\begin{flushright}
+
+\singlespacing % Reset line spacing to 1 from here on
+\textbf{AKASH T M} \\
+
+\vspace{20pt} 
+
+
+
+
+ 
+  
+\end{flushright}
+\end{center}
+
+\begin{flushleft}
+\textbf{Kodakara}\\
+\textbf{23-01-2021}
+\end{flushleft}
+%%%
+% If you have to keep the name of 5 faculties, arrange the faculties - mini project coordinator, guide, program coordinator in one line from left to right and by using \begin{center} and \end{center} arrange HOD below the above faculties and above the horizontal line.
+%%%
+
+
+
+
+\end{titlepage}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%CERTIFICATE%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{titlepage}
+\newgeometry{left=1in,right=1in,top=1in,bottom=1in}
+\onehalfspacing
+\begin{center}
+{\fontsize{16}{10}\selectfont\textbf{DEPARTMENT OF COMPUTER SCIENCE \& ENGINEERING}}\\
+{\fontsize{14}{14}\selectfont\textbf{SAHRDAYA COLLEGE OF ENGINEERING AND TECHNOLOGY, KODAKARA, THRISSUR}}\\
+\end{center}
+
+
+
+\begin{figure}[hbtp]
+
+\centering
+\includegraphics[scale=1.2]{sahrdaya_logo.png}
+\end{figure}
+\vspace{.1in}
+\begin{center}
+{\fontsize{16}{16}\selectfont\textbf{BONAFIDE CERTIFICATE}}\\
+\vspace{.1in}
+\end{center}
+
+\doublespacing
+This is to certify that the project report entitled \textbf{ENHANCED PHARMACEUTICAL SUPPLY CHAIN MANAGEMENT USING ETHEREUM BLOCKCHAIN} submitted by \textbf{AKASH T M (SHR17CS014)} to the APJ Abdul Kalam Technological University in partial fulfillment of the requirements for the award of the Degree of Bachelor of Technology in Computer Science and Engineering is a bonafide record of the project work carried out by him under our guidance and supervision. This report in any form has not been submitted to any other University or Institute for any other purpose.
+
+\begin{center}
+
+
+%\singlespacing % Reset line spacing to 1 from here on
+\vspace{12pt} 
+% if the project has Coguide tye use the following.
+\centerline{\textbf{GUIDE} \hspace*{\fill} \textbf{CO-GUIDE}} 
+\centerline{Mr. Shyam Krishna K  \hspace*{\fill}  Mr. Willson Joseph C}
+\centerline{Assistant Professor \hspace*{\fill}  Assistant Professor}
+\begin{flushright}
+% if the project has no coguide then use the style as given below for Guide
+\vspace{12pt} 
+ \singlespacing % Reset line spacing to 1 from here on
+\textbf{PROJECT COORDINATOR} \\
+Mr. Willson Joseph C \\
+ Assistant Professor \\
+ \\
+\vspace{12pt} 
+ \singlespacing % Reset line spacing to 1 from here on
+ \textbf{HEAD OF THE DEPARTMENT} \\
+Dr. M Rajeswari \\
+ Professor 
+
+ 
+  
+\end{flushright}
+\end{center}
+\vspace{-12pt} 
+\begin{flushleft}
+\textbf{Kodakara}\\
+\textbf{23-01-2021}
+\end{flushleft}
+%%%
+% If you have to keep the name of 5 faculties, arrange the faculties - mini project coordinator, guide, program coordinator in one line from left to right and by using \begin{center} and \end{center} arrange HOD below the above faculties and above the horizontal line.
+%%%
+
+
+
+
+\end{titlepage}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%ACKNOWLEDGMENT%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\pagestyle{plain}
+
+\addcontentsline{toc}{section}{\textnormal{\textbf{ACKNOWLEDGMENT}}}
+\begin{center}
+\section*{ACKNOWLEDGMENT}
+\end{center}
+\onehalfspacing
+\hspace*{0.5cm}We would like to express our immense gratitude and profound thanks to all those who helped us to make this project a great success. We express our gratitude to the almighty God for all the blessings endowed on us.\\
+
+\hspace*{0.5cm}We express our sincere thanks to our Executive Director \textbf{Rev.Fr. George Pareman} and Principal \textbf{Dr. Nixon Kuruvila} for providing us with such a great opportunity.\\
+
+\hspace*{0.5cm}We also convey our gratitude to our Head of the Department \textbf{Dr. M Rajeswari} for having given us a constant inspiration and suggestion. We extend our deep sense of gratitude to our project coordinator \textbf{Mr. Wilson Joseph C}, Assistant Professor of Computer Science \& Engineering Department for providing enlightening guidance through the project. We can hardly find words to express our deep appreciation for the help and warm encouragement that we have received from our project guide \textbf{Mr. Shyam Krishna K }, Assistant Professor of Computer Science \& Engineering Department for his whole-hearted support.\\
+
+\hspace*{0.5cm}It was their encouragement that helped us to complete the project. We can hardly find words to express our deep appreciation of the help and warm encouragement that we received from our parents. We are extremely thankful and indebted to our friends who supported us in all aspects of the project work.\\
+\vspace{1cm}
+
+\begin{flushright}
+\textbf{Abhijith M S}\\
+\vspace{0.5 cm}
+\textbf{Achuthan}\\
+\vspace{0.5 cm}
+\textbf{Akash T M}\\
+\vspace{0.5 cm}
+\textbf{Alan Babu Manuel}\\
+\end{flushright}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\pagestyle{plain}
+
+\addcontentsline{toc}{section}{\textnormal{\textbf{INSTITUTIONAL VISION, MISSION AND QUALITY POLICY}}}
+\begin{center}
+
+\section*{\normalsize{\textbf{INSTITUTIONAL VISION}}}
+
+\end{center}
+\doublespacing
+Evolve as a leading technology institute to create high caliber leaders and innovators
+of global standing with strong ethical values to serve the industry and society.\\
+\section*{\hfil\normalsize{\textbf{INSTITUTIONAL MISSION}}\hfil}
+Provide quality technical education that transforms students to be knowledgeable,
+skilled, innovative and entrepreneurial professionals.
+Collaborate with academia and industry around the globe, to strengthen the education
+and research ecosystem.
+Practice and promote high standards of professional ethics, good discipline, high
+integrity and social accountability with a passion for holistic excellence.\\
+\section*{\hfil\normalsize{\textbf{QUALITY POLICY}}\hfil}
+We at Sahrdaya are committed to provide Quality Technical Education through continual improvement and by inculcating Moral \& Ethical values to mould into Vibrant Engineers with high Professional Standards.\\
+
+We impart the best education through the support of competent \& dedicated faculties, excellent infrastructure and colloboration with industries to create ambience of excellence.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\pagestyle{plain}
+
+\addcontentsline{toc}{section}{\textnormal{\textbf{DEPARTMENTAL VISION, MISSION, PEOs ,PO AND PSOs}}}
+\begin{center}
+
+\section*{\normalsize{\textbf{Departmental Vision}}}
+
+\end{center}
+\doublespacing
+\begin{longtable}{| p{.95\textwidth} |}
+\hline
+To be a nationally recognized centre for quality education and research in diverse
+areas of computer science engineering with a strong social commitment.
+\\
+\hline
+
+\end{longtable}
+
+\section*{\hfil\normalsize{\textbf{Department Mission}}\hfil}
+
+\begin{longtable}{| p{.95\textwidth} |}
+\hline
+\begin{itemize}
+\item Impart relevant technical knowledge,skills and attributes along with values and ethics.
+\item Enhance creativity and quality in research through project based learning environment.
+\item Mould Computer Science Engineering Professionals in synchronization with the dynamic industry requirements.
+\item Inculcate essential leadership qualities coupled with commitment to the society.
+
+\end{itemize}
+\\
+\hline
+
+\end{longtable}
+\section*{\hfil\normalsize{\textbf{Programme Educational Objectives (PEOs) }}\hfil}
+\doublespacing
+
+\begin{longtable}{| p{.15\textwidth} | p{.80\textwidth} |}
+\hline
+PEO1 & Take up challenging careers in suitable corporate, business or educational
+sectors across the world, in multi-cultural work environment.
+\\
+\hline
+PEO2 & Continuously strive for higher achievements in life keeping moral and ethical
+values such as honesty, loyalty, good relationship and best performance, aloft.
+ \\
+\hline
+PEO3 & Be knowledgeable and responsible citizens with good team-work skills,
+competent leadership qualities and holistic values.
+ \\
+\hline
+
+
+\end{longtable}
+
+\vspace{1cm}
+
+\section*{\hfil\normalsize{\textbf{Programme Specific Objectives (PSOs)}}\hfil}
+\doublespacing
+
+\begin{longtable}{| p{.15\textwidth} | p{.80\textwidth} |}
+\hline
+PSO1 & To nurture students with technically inquisitive attitude so that any real- world
+problem could be tackled with a problem solving perspective, finding a suitable
+mathematical model with strong fundamental technological concepts to solve
+and apply to rapid growing arena of computer technology.
+\\
+\hline
+PSO2 & To develop professionals with excellent exposure to the latest technologies to
+design high quality products unique in innovation, technology, software,
+security, hardware and usefulness; making high impact on society, business and technology.
+ \\
+\hline
+PSO3 & To enhance knowledge in practical implementation of technology with regard
+to  parallelism,  virtualization of networks,  scientific  analysis  and  modeling,
+visualization,  natural language processing,  digital synthesis  of  data and  its
+manipulation,  wireless and  mobile communication,  storage and retrieval  of
+huge amount of data etc.
+ \\
+\hline
+
+
+\end{longtable}
+
+\section*{\hfil\normalsize{\textbf{Programme Outcomes (POs)}}\hfil}
+\onehalfspacing
+
+\begin{longtable}{| p{.15\textwidth} | p{.80\textwidth} |}
+\hline
+PO1 & Engineering knowledge: Apply the knowledge of mathematics, science,
+engineering fundamentals, and an engineering specialization to the solution of
+complex engineering problems.
+\\
+\hline
+PO2 & Problem analysis: Identify, formulate, review research literature, and analyze
+complex engineering problems reaching substantiated conclusions using first
+principles of mathematics, natural sciences, and engineering sciences.
+ \\
+\hline
+PO3 & Design/development of solutions: Design solutions for complex engineering
+problems and design system components or processes that meet the specified
+needs with appropriate consideration for the public health and safety, and the
+cultural, societal, and environmental considerations.
+ \\
+\hline
+PO4 & Conduct investigations of complex problems: Use research-based knowledge
+and research methods including design of experiments, analysis and
+interpretation of data, and synthesis of the information to provide valid
+conclusions.
+ \\
+\hline
+PO5 & Modern tool usage: Create, select, and apply appropriate techniques, resources,
+and modern engineering and IT tools including prediction and modeling to
+complex engineering activities with an understanding of the limitations.
+ \\
+\hline
+PO6 & The engineer and society: Apply reasoning informed by the contextual
+knowledge to assess societal, health, safety, legal and cultural issues and the
+consequent responsibilities relevant to the professional engineering practice.
+ \\
+\hline
+PO7 & Environment and sustainability: Understand the impact of the professional
+engineering solutions in societal and environmental contexts, and demonstrate
+the knowledge of, and need for sustainable development.
+ \\
+\hline
+PO8 & Ethics: Apply ethical principles and commit to professional ethics and
+responsibilities and norms of the engineering practice.
+ \\
+\hline
+PO9 & Individual and team work: Function effectively as an individual, and as a
+member or leader in diverse teams, and in multidisciplinary settings.
+ \\
+\hline
+PO10 & Communication: Communicate effectively on complex engineering activities
+with the engineering community and with society at large, such as, being able to
+comprehend and write effective reports and design documentation, make
+effective presentations, and give and receive clear instructions.
+ \\
+\hline
+PO11 & Project management and finance: Demonstrate knowledge and understanding of
+the engineering and management principles and apply these to one’s own work,
+as a member and leader in a team, to manage projects and in multidisciplinary
+environments.
+ \\
+\hline
+PO12 & Life-long learning: Recognize the need for, and have the preparation and ability
+to engage in independent and life-long learning in the broadest context of
+technological change.
+
+ \\
+\hline
+
+\end{longtable}
+\vspace{2cm}
+\section*{\hfil\normalsize{\textbf{COURSE OBJECTIVES }}\hfil}
+\doublespacing
+
+
+\begin{longtable}{| p{.98\textwidth} |}
+\hline
+To develop skills in doing literature survey, technical presentation and report preparation.
+\\
+\hline
+
+
+
+\end{longtable}
+
+
+
+\section*{\hfil\normalsize{\textbf{COURSE OUTCOMES }}\hfil}
+\doublespacing
+The student will be able to
+\begin{longtable}{| p{.15\textwidth} | p{.80\textwidth} |}
+\hline
+CO1 & Envisage applications for societal needs.
+\\
+\hline
+CO2 & Develop skills for analysis and synthesis of practical systems.
+ \\
+\hline
+CO3 & Learn to use new tools effectively and creatively.
+ \\
+\hline
+CO4 & Learns to carry out analysis and cost-effective, environmental friendly designs of engineering
+systems.
+ \\
+\hline
+CO5 & Develops the ability to write Technical / Project reports and oral presentation of the work done to an audience.
+\\
+\hline
+\end{longtable}
+
+%%%%%%%%%%%%%%%%%%%%ABSTRACT%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\addcontentsline{toc}{section}{\textnormal{\textbf{ABSTRACT}}}
+\begin{center}
+ \section*{\Large{\textbf{ABSTRACT}}}
+\end{center}
+\onehalfspacing
+
+\hspace*{0.5cm}The presence of counterfeit drugs in the healthcare industry is evident with one in ten medical products in the developing
+countries being substandard or falsified. This means that there are millions of patients unaware that they are taking medicines
+that fail to work as prescribed. This problem of counterfeits arises due to a complex supply chain compounded by the lack
+of transparency in the products’ end to end journey. Supply chain management on it’s own is a complicated process and
+the amount of time it takes to settle transactions and regulations cause a lot of overhead. Blockchain technology is perfect
+for supply chain management as it features a decentralized and immutable digital ledger. Blockchain provides security and
+their user friendly features help supply chain management overcome many issues. The inherent features of the blockchain are
+further enhanced by smart contracts which are computer programs that can automatically execute, control and record events
+according to the terms written in them. Our solution uses smart contracts written for ethereum blockchain to record the drugs
+throughout their life cycle on the supply chain. This will provide a way to prove the authenticity of medicines and prevent
+counterfeits from entering the market. Being transparent in nature the regulators (legal dept.) can easily verify the openly
+available records any time. The bills can be easily settled between the participants via the trustless smart contract. All this
+smoothens the entire process and saves valuable time which can again cut costs. By ensuring minimal delay in transactions
+and assuring authenticity of drugs the current pharmaceutical supply chain can be further enhanced.\par
+
+%your abstract here.................minimum 60 words.
+%single paragraph. 
+%brief about the work you are doing,results you got.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+%%%%%%%%%%%%%%%%%%%%ABSTRACT%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+
+
+
+
+%%%%%%%%%%%%%%CONTENTS%%%%%%%%%%%%%
+\newpage
+\pagestyle{empty}
+\begin{center}
+\tableofcontents 
+\end{center}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%% List of tables %%%%%%%%%%%%%%%%%%%
+
+
+
+
+%%%%%%%%%%%List of Fig%%%%%%%%%%%%%%%%%%%%%
+\newpage
+{\setlength{\baselineskip}{1\baselineskip}
+\begin{center}	
+\listoffigures				%for adding list of figures
+\end{center}		
+\addcontentsline{toc}{section}{LIST OF FIGURES}
+}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\newpage
+\pagestyle{plain}
+
+\begin{center}
+\section*{\large{ LIST OF ABBREVIATIONS}}		%for adding list of Abbreviations
+\end{center}
+
+\addcontentsline{toc}{section}{LIST OF ABREVIATIONS}
+
+
+% You can list the abbreviations in your work here. It is shown as table. Type the Abbreviation in the first column and expansion in the second column. 
+\pagestyle{plain}
+\vspace{1cm}
+\begin{center}
+\begin{table}[h!]
+ \begin{tabular}{p{8cm}p{8cm}}
+  \textbf{ABBREVIATION} & \textbf{DESCRIPTION} \\[0.1cm]
+  \\
+SME&Small \& Medium Enterprises\\ 
+\\
+NFC&Near Field Communication\\
+\\
+POW&Proof Of Work\\
+\\
+DApp&Decentralized Application\\
+\\ 
+EVM&Ethereum Virtual Machine\\
+\\
+RFID&Radio Frequency Identification\\
+\\
+IoT&Internet of Things
+
+
+
+\end{tabular}
+\end{table}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Use \par at the end of each paragraph. You can give intend by giving \hspace{1 cm} at the beginning of each paragraph.
+\newpage
+
+\pagenumbering{arabic}
+
+\renewcommand{\chaptername}{CHAPTER}
+\chapter{INTRODUCTION}
+\thispagestyle{fancy}
+\pagestyle{fancy}
+\renewcommand*{\thepage}{\footnotesize\arabic{page}} % 
+\onehalfspacing
+
+\setlength{\parindent}{5ex}
+\hspace*{1cm}The prevalence of counterfeit drugs in the health care sector is clear, with one in ten medicinal items in developed countries being under-standard or falsified \cite{IEEEexample:article_typical}. Falsified medicines can contain incorrect ingredients and doses or display no presence of the active ingredient. This means that millions of patients are unaware that they are taking drugs that do not perform as prescribed. Not only do they fail to treat patients, but some of the counterfeits can cause major illness or even death. Counterfeits are a major commercial drain on individuals and health care facilities and can in some cases, contribute to additional financial pressures on the health care system if the patient is consequently in need of treatment. 
+
+All this problems arise due to the existence of several loop holes in the supply chain of pharmaceutical industries. Supply chain management is a complex business to business and business to customer network. Such a system exists for the seamless sharing of product related information between stakeholders. Some supply chains are quite complex and lifetime of a product on these chains can span months. This long lifetime and complexity make it vulnerable to unethical practices. 
+
+Blockchain technology \cite{IEEEexample:conf_typical} is perfect for supply chain management solutions. This is because blockchain is a trustless environment. Normal supply chains are held together by trust. By bringing the trustless nature of blockchain into the supply chains we can bring about a layer of security where stakeholders cannot deceive each other. The inherent features of blockchain such as transparency, immutability, and distributed setup are all powerful features that was unthinkable before. Here we are looking at five different studies on using blockchain and coming up with a solution on our own that focuses on bringing a balance between traditional systems and blockchain driven systems. 
+\section{GENERAL BACKGROUND}
+\hspace*{1cm}The pharmaceutical supply chain is the means by which prescription medicines are delivered to patients.Ingredients for medicines are normally sourced from a variety of places before reaching the final formula. Once the final formula is achieved, the drug can be distributed. During the supply chain life-cycle, the drug will transfer among man different entities, specifically between the manufacturer and the patient. Every transaction offers an opportunity for counterfeit or falsified products to penetrate the supply chain and the industry. A typical supply chain scenario in the pharmaceutical industry. Manufacturers, wholesalers, and pharmacies. The manufacturer’s role within the supply chain is to ensure the readiness of its inventory of drugs so they can be distributed to wholesalers. Manufacturers receive orders from distributors/wholesalers and then ship the products to the distributor’s warehouses where they are put away in storage. Distributors \cite{IEEEexample:book_typical} provide manufacturers with inventory data reports to maintain transparency throughout the process. The role of wholesalers is to make the process of purchasing pharmaceutical drugs a simpler and more efficient process. Wholesalers connect and deliver to thousands of pharmacies and dispensers. This saves manufacturers efforts of dispatching drugs to pharmacies individually, because instead they can send large batches of medications to a relatively small number of wholesalers. Once the product is in the hands of the wholesaler, it can provide a range of services, including drug distribution, electronic order services, and repackaging. 
+The final entities in the supply chain are pharmacies and hospitals. Pharmacies account for approximately 75\% of the prescription drug market, whereas such nonretail providers as hospitals comprise the remaining 25\%.4 Pharmacies and hospitals purchase products from wholesalers, and then they are sold to the final patient.
+\section{PROBLEM DEFINITION}
+\hspace*{1cm}The presence of counterfeight drugs in the healthcare industry is evident with one in ten medical products in the developing industries being substandard or falsified. This means that there are millions of patients unaware that they are taking medicines that fail to work as prescribed. This problem of counterfeits arrises due to a complex supply chain compounded by the lack of transparency in the products’ end to end journey. This complexity is caused by the shear number of companies involved in the supply chain where the ownership of the drugs change between manufacturers, distributors, repackagers and wholesalers before reaching the patient. The little to no visibility between the parties involved raises the question of authenticity of drugs. Centralized solutions to this problem exist but are flawed and limited as counterfeits get more sophisticated and their packaging rapidly improves.
+\section{MOTIVATION}
+\hspace*{1cm}The health-care industry is rife with counterfeit drugs (which infringe upon
+the intellectual property rights) that penetrate the industry’s supply chain. This is due to a complex supply chain, compounded by a lack of visibility of the products’ end-to-end journey. The effects of falsified and counterfeit drugs have the potential to cause devastating consequences. The complexity of the drug distribution supply chain makes it difficult to prevent counterfeits infiltrating the industry. There are numerous companies involved in the supply chain where drugs change ownership between manufacturers to distributors, repackagers, and wholesalers before reaching the patient. There is little or no visibility between the parties involved in the supply chain to track the authenticity of the drugs. This causes a level of uncertainty for patients and dispensaries concerning the authenticity of the products sold at the end of the chain.
+\par
+\hspace*{1cm}There are currently several solutions to this problem, but as the sophistication of counterfeit products and packaging rapidly improves, they have laws and limitations. Some solutions endeavor to trace transactions of the products as they move through the supply chain and change ownership, although there is still a central organization present that is at risk of being compromised, whereby documents can easily be falsified. Also, a central system is prone to a single point of failure. Solutions like our proposal could potentially be adapted to include the antitampering and distributed database capacities of blockchain.
+\vspace{1 cm}
+\section{OBJECTIVES}
+The objectives of this work are:
+\begin{itemize}
+    \item Propose a model that incorporate blockchain and traceability.
+    \item The model will be having precision and stable performance.
+    \item By this model supplychain systems can run smoothly and handle data.
+    \item The blockchain operates on a distribruted platform, so in this model each participants has access to exactly same ledger.
+   \item Proposed model provide mechanism to guarantee the quality and legitimacy of the data uploaded to the blockchain.
+\end{itemize}
+%%%%%%%%%%%%%%%%%%%%%%% LITERATURE SURVEY %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{LITERATURE SURVEY}
+\thispagestyle{fancy}
+\onehalfspacing
+\hspace*{1cm} Use the same format for paragraphs from the previous chapter.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{PROPOSED SYSTEM}
+\thispagestyle{fancy}
+\onehalfspacing
+\hspace*{1cm} Use the same format for paragraphs from the previous chapter.
+%================================================
+\chapter{DESIGN PHASE}
+\thispagestyle{fancy}
+\onehalfspacing
+\hspace*{1cm}Use the same format for paragraphs from the previous chapter.
+\section{Equations}
+Ensure you use standard notations for Vectors or scalar variables as per standards.
+
+ \begin{equation} \label{eqn}
+	E = {mc^2} 
+	\end{equation}
+ 	 The equation \ref{eqn} states mass equivalence relationship.
+
+\section{Multiline Equation}
+\begin{multline}
+\mathbf{trust(u,v,d)=w_1(u)a_1(u,d)C(u,v,d)+w_2(u)a_2(u,d)L(u,v,d)} \\
+\mathbf{+w_3(u)a_3(u,d)S(u,v,d)+w_4(u)a_4(u,v)N(u,v)}
+\end{multline}
+
+\section{Table}
+\begin{table}[h!]
+\centering
+\caption{Various models and their advantages.}
+\label{my-label}
+\begin{tabular}{||l|l||}
+\hline
+\textbf{ Representative approaches }& \textbf{Advantages }   \\
+ \hline \hline
+ Behavioral Trust   &   Higher Correlation \& prominence.   \\
+ \hline
+ Merge Trust &   High accuracy \& coverage, better predictive performance.   \\
+\hline
+  Strength model &  Better classification based on tie strength.  \\
+  \hline
+  Social trust with CF & Higher average precision and accuracy\\
+\hline  
+  RS for mobile OSN & Higher precision \& lower MAE\\
+  \hline
+\end{tabular}
+\end{table}
+
+\section{Algorithm}
+
+\begin{algorithm}
+\caption{Initializing users}\label{euclid}
+\begin{algorithmic}[1]
+\Procedure{USER\_INIT()}{}
+\State Let U denote the set of all users who have entered the values for the set of attributes $X=(x_1,x_2,...,x_n)$ during the time of registration.
+\State Calculate similarity between each user $u_i \in U$ using pearson Correlation Coefficient(PCC).
+$Pearson (x,y) = \frac{\sum {(xy)} − \frac{(\sum{x})(\sum{y})}{n}}  {\sqrt{(\sum{({x}^{2})} - \frac{{(\sum{x})}^{2}}{n}) (\sum {({y}^{2})} - \frac{{(\sum{y})}^{2}}{n})}} $
+\State Rank the users based on this similarity.
+\State Accept the criterion $(x_i's)$ for calculating similarity and rank the users accordingly.
+\State Set the trust value based on this similarity measurement alone. Let this trust value be
+basic\_trust(u,v) for any two users u and v in U.
+
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter{DESIGN DIAGRAMS}
+\thispagestyle{fancy}
+\onehalfspacing
+\section{ARCHITECTURE DIAGRAM}
+\begin{figure}[hbtp]
+    \centering
+    \includegraphics[scale=1]{architectureDiag.jpeg}
+    \caption{Architecture diagram}
+    \label{fig:architecture}
+\end{figure}
+The user interface of the application is to be made in React.js and hosted on a firebase server. The node.js server will be hosted separately on heroku server and MongoDB atlas will be used to host MongoDB database. The smart contract will be hosted on the ethereum test networks. The application will use the different technologies in an interwoven form to serve its' functionality.
+\newpage
+\section{FLOWCHART}
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[scale=0.55]{Flowchart.jpeg}
+    \caption{Flowchart}
+    \label{fig:my_label}
+\end{figure}
+The system first checks whether the wallet address logged in is that of the smart contract owner or not. If so then administrator privileges like participant creation and deletion are available. Participant creation requires manual input of participant data from the administrator. If the logged in address doesn't match that of the administrator then the system checks whether the address is that of a participant company. If yes then participants can go on to create new products in their inventory or to buy other products. If chosen to create a new product then their details have to be manually inserted. Once done they are stored in the smart contract storage open for all to view. The participant can go on to create new stock units of the created products. Product data has to be retrieved from the smart contract and serial numbers and ownership for these units are automatically assigned. These details are uploaded to the mongo DB storage.
+\par
+If the participant has previously chosen to buy products then the entire list of products from different companies are available to them. If chosen to buy an agreement is sent to the seller and if signed and accepted by the seller the buyer can proceed to payment. After this the ownership of the units are transferred to the buyer. The data is updated in mongo db and hashes are stored to the blockchain. 
+
+\section{BLOCK DIAGRAM}
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[scale=0.5]{Block diagram final.jpeg}
+    \caption{Block diagram}
+    \label{fig:my_label}
+\end{figure}
+Participant creation module gives us companies that are open to use the system. They can create their unique products and units of those products open for buying by other participants. The product creation module is responsible for accepting required data and creating products in the smart contract. These products can produce units which is done by the factory module which accepts serial numbers and assigns ownership. The created units are available inside buy/sell module. On using the buy/sell module to create a transaction an agreement is cooked up by the contract module and their hashes are stored inside.
+\section{DATA FLOW DIAGRAM}
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[scale=0.8]{Data Flow Level 0.jpeg}
+    \caption{Data Flow diagram Level 0}
+    \label{fig:my_label}
+\end{figure}
+ Level 0 of data flow diagram shows how the participant data provided by the smart contract owner and product data provided by the participants are used by the Open Capsule system to provide a truly decentralized and tamper proof supply chain management solution that allows individual tracking of products. 
+\begin{figure}[!htb]
+\vspace{-0.5cm}
+    \centering
+    \includegraphics[scale=0.76]{Data Flow Level 1 final.jpeg}
+    \caption{Data Flow diagram Level 1}
+    \label{fig:my_label}
+\end{figure}
+\newpage
+The participant data is entered into the creation of a new participant. The related data is stored in the smart contract. The participant data along with addresses and serial numbers are used for product and unit creation. The serial number generation and ownership assignment used the data stored in the smart contract about the participants. The ownership data and unit data are all stored in mongo db. In times of buying the data is transferred from both mongo db and smart contract to create agreements between participants.
+
+\section{ACTIVITY DIAGRAM}
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[scale=0.55]{Activity diagram.jpeg}
+    \caption{Activity diagram}
+    \label{fig:my_label}
+\end{figure}
+The smart contract owner or administrator has the ability to add or remove participants. The activities of the participant or user include creating and deleting products and their units. The user is also notified when another participant wants to buy products from them. The Open Capsule environment allows for the participants to enter details while creating units and products. All the interaction between participants happens through here. The interactive part of the entire system is inside the Open Capsule environment. The server is responsible for entering and retrieving data from the database and also talks to the smart contract when needed. The product and unit data is stored in both the mongo DB database and inside the smart contracts in the form of hashes.
+
+\section{SEQUENCE DIAGRAM}
+\begin{figure}[!hbt]
+    \centering
+    \includegraphics[scale=0.56]{Sequence diagram.jpeg}
+    \caption{Sequence diagram}
+    \label{fig:my_label}
+\end{figure}
+The create participant and create product sequences are fairly simple in terms of complexity. In creating new units the product data has to retrieved from products and also new serial numbers from ownership module. While buying and selling the buy/sell module initiates a sequence where a new contract/agreement is made by the contract module and returned to the buy/sell module. The module then sends this agreement to the participant for signing. Upon signing by the participant the ownership module changes the ownership of the sold units and thus buy/sell process is completed.
+
+\section{USE CASE DIAGRAM}
+The system administrator or the smart contract owner can add or remove companies and legal entities. The companies can create or delete their products from the system and can also buy and sell their products to other involved participants. The legal entities can overview the entire system and has special privileges when it comes to viewing sensitive data. The customers can use the serial number of the products to verify the authenticity of the products by cross referencing the data stored in normal database and their hashes inside the smart contracts.
+\begin{figure}[!hbt]
+    \centering
+    \includegraphics[scale=0.6]{Use Case Final.jpeg}
+    \caption{Use case diagram }
+    \label{fig:my_label}
+\end{figure}
+
+
+\vspace{2cm}
+\section{ER DIAGRAM}
+The entities inside share relationship between normal databases and smart contract data. The participant companies have their unique wallet addresse, GST numbers , name of company and their locations. These companies can own products which has unique product code and names. These products have units which represent the individual products that can be tracked. These units have serial numbers and ownership data that tell who the product belongs to.
+\begin{landscape}
+\begin{figure}[!hbt]
+    \centering
+    \includegraphics[scale =0.7]{ER diagram.jpeg}
+    \caption{ER diagram}
+    \label{fig:my_label}
+\end{figure}
+\end{landscape}
+
+%========================================
+\chapter{REQUIREMENTS}
+\thispagestyle{fancy}
+\onehalfspacing
+\section{HARDWARE REQUIREMNETS}
+\begin{enumerate}
+    \item Processor: Intel core i3 and above
+    \item RAM: 4GB and above
+    \item Hard Disk: 50GB
+\end{enumerate}
+\section{SOFTWARE RQUIREMENTS}
+\begin{enumerate}
+    \item Operating System: Windows,Ubuntu or MAC
+    \item Languages: Solidity, Javascript
+    \item Tools and Frameworks: Ganache, Truffle, Node JS, Web3 JS, React JS and Metamask
+    \item Database: Mongo DB
+\end{enumerate}
+%=========================================
+\chapter{EXPECTED RESULTS}
+\thispagestyle{fancy}
+\onehalfspacing
+\hspace*{1cm}Use the same format for paragraphs from the previous chapter.
+%=========================================
+\chapter{CONCLUSION}
+\thispagestyle{fancy}
+\onehalfspacing
+\hspace*{1cm}Use the same format for paragraphs from the previous chapter.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{IEEEabrv,a1}   
+%Refer a1.bib for entering editing the referemces in bibtex file. Bibtex entries can be downloaded from google scholar /  journal pages using "Cite" option
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%55
+\newpage
+
+
+\pagestyle{plain}
+\appendix
+
+\clearpage
+\appendix
+\renewcommand{\thechapter}{\Roman{chapter}}
+%\pagenumbering{roman}% resets `page` counter to 1
+\renewcommand*{\thepage}{\roman{page}}
+\setcounter{page}{14} %%%% Change this number to resume the roman numbering
+\addcontentsline{toc}{chapter}{APPENDICES}
+
+%%%%% Attach the base/reference papers using the code below. Upload the files to the directory of tex file.
+\chapter{Paper Publications and Achievements}
+%include the list of Achievements and Paper Publications
+\begin{enumerate}
+    \item ......
+    \item ......
+    \item ......
+\end{enumerate}
+%include the pdf of Paper Publications
+\includepdf[pages=-,pagecommand=\thispagestyle{plain}]{BP-02.pdf}
+\chapter{Code}
+\end{document}

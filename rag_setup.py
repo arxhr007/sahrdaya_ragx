@@ -211,7 +211,15 @@ def rerank_docs(query: str, docs: list, top_k: int) -> list:
 
 # LLM
 # ------------------ GROQ API KEY (from environment variable) ------------------
+# Support both a single key and a comma-separated key pool.
+# For bootstrap objects in this module, pick the first available key.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+if not GROQ_API_KEY:
+    _pool_raw = os.environ.get("GROQ_API_KEYS", "").strip()
+    if _pool_raw:
+        _pool = [k.strip() for k in _pool_raw.split(",") if k.strip()]
+        if _pool:
+            GROQ_API_KEY = _pool[0]
 
 if not GROQ_API_KEY:
     print("\n" + "="*70)
@@ -221,6 +229,7 @@ if not GROQ_API_KEY:
     print("🔗 https://console.groq.com/keys")
     print("\nThen set it as an environment variable:")
     print('   Windows (PowerShell): $env:GROQ_API_KEY = "gsk_..."')
+    print('   Or set GROQ_API_KEYS="gsk_1,gsk_2,..." in .env')
     print('   Linux/macOS:          export GROQ_API_KEY="gsk_..."')
     print("="*70 + "\n")
     exit(1)

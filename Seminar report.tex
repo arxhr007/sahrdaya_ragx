@@ -1,0 +1,459 @@
+\documentclass[12pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{mathptmx}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow,bigstrut}
+\usepackage{graphicx}
+\usepackage{times}
+\usepackage{tocloft}
+\usepackage[a4paper,bindingoffset=0.2in,%
+            left=1.5in,right=1in,top=1in,bottom=1in,%
+            footskip=.25in]{geometry}
+\usepackage[pagestyles]{titlesec}
+\usepackage{setspace}
+\usepackage{sectsty}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\captionsetup[table]{labelsep=space}
+\setlength{\belowcaptionskip}{-4pt}
+\captionsetup[figure]{skip=-2pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{}
+\rhead{\fontsize{8}{12} \selectfont SAHRDAYA RAG X - Retrieval Augmented College Assistant}
+\rfoot{\fontsize{8}{12} \selectfont \thepage}
+\lfoot{\fontsize{8}{12} \selectfont Sahrdaya College of Engineering \& Technology, Kodakara}
+
+\setlist{nosep}
+\renewcommand{\footrulewidth}{}
+\renewcommand{\headrulewidth}{}
+\sectionfont{\fontsize{12}{15}\MakeUppercase\selectfont}
+\subsectionfont{\normalfont\fontsize{12}{15}\selectfont}
+\subsubsectionfont{\normalfont\fontsize{12}{15}\selectfont}
+\parindent=0cm
+
+\renewcommand{\cfttoctitlefont}{\normalfont\normalsize\bfseries\MakeUppercase}
+\renewcommand{\cftloftitlefont}{\normalfont\normalsize\bfseries\MakeUppercase}
+\renewcommand{\cftlottitlefont}{\normalfont\normalsize\bfseries\MakeUppercase}
+
+\titleformat{\chapter}[display]
+{\normalfont\huge\bfseries\centering}{\centering\chaptertitlename\ \thechapter}{14pt}{\huge}
+\titlespacing*{\chapter}{0pt}{50pt}{40pt}
+
+\newpagestyle{mystyle}{\sethead{}{}{}\setfoot{}{\thepage}{}}
+\pagestyle{mystyle}
+
+\begin{document}
+\pagenumbering{roman}
+\renewcommand\bibname{REFERENCES}
+\renewcommand*{\thepage}{\footnotesize\roman{page}}
+
+% COVER PAGE
+\begin{titlepage}
+\newgeometry{left=1in,right=1in,top=1in,bottom=1in}
+\begin{center}
+\onehalfspacing
+{\fontsize{18}{19}\selectfont \textbf{SAHRDAYA RAG X: A RETRIEVAL-AUGMENTED AI ASSISTANT FOR COLLEGE INFORMATION SYSTEMS\\}}
+\vspace{1.2 cm}
+{\fontsize{16}{14}\selectfont A PROJECT REPORT}\\
+\vspace{0.6 cm}
+{\fontsize{14}{16}\selectfont Submitted by}\\
+\vspace{1 cm}
+{\fontsize{16}{14}\selectfont \textbf{YOUR NAME}}\\
+{\fontsize{16}{14}\selectfont \textbf{(ROLL NUMBER)}}\\
+\vspace{1 cm}
+to\\
+\vspace{0.5 cm}
+{\fontsize{14}{14}\selectfont the APJ Abdul Kalam Technological University\\
+\vspace{0.3cm}in partial fulfillment of the requirements for the award of the Degree}\\
+\vspace{0.5 cm}
+of\\
+\vspace{0.5 cm}
+{\fontsize{14}{14}\selectfont \textit{Bachelor of Technology}\\ \textit{in}\\\textit{Computer Science and Engineering}}\\
+\vspace{1 cm}
+
+\begin{figure}[hbtp]
+\centering
+\includegraphics[scale=1.2]{sahrdaya_logo.png}
+\end{figure}
+
+\vspace{1.3 cm}
+{\fontsize{16}{14}\selectfont \textbf{Department of Computer Science and Engineering}\\
+SAHRDAYA COLLEGE OF ENGINEERING AND TECHNOLOGY\\
+KODAKARA, THRISSUR - 680684}
+
+\vspace{0.5cm}
+{\fontsize{14}{16}\selectfont{\upshape MARCH 2026}}
+\end{center}
+\end{titlepage}
+
+% DECLARATION
+\begin{titlepage}
+\newgeometry{left=1in,right=1in,top=1in,bottom=1in}
+\onehalfspacing
+\begin{center}
+{\fontsize{16}{10}\selectfont\textbf{DECLARATION}}\\
+\end{center}
+
+I hereby declare that the project report titled \textbf{``Sahrdaya RAG X: A Retrieval-Augmented AI Assistant for College Information Systems''}, submitted in partial fulfillment of the requirements for the award of the degree of Bachelor of Technology of APJ Abdul Kalam Technological University, Kerala, is a bonafide work carried out by me under the guidance of the faculty members of the Department of Computer Science and Engineering. This report has not been submitted previously for the award of any degree, diploma, or similar title in any other university.
+
+\begin{flushright}
+\singlespacing
+\textbf{YOUR NAME} \\
+\vspace{20pt}
+\end{flushright}
+
+\begin{flushleft}
+\textbf{Kodakara}\\
+\textbf{Date: \today}
+\end{flushleft}
+\end{titlepage}
+
+% CERTIFICATE
+\begin{titlepage}
+\newgeometry{left=1in,right=1in,top=1in,bottom=1in}
+\onehalfspacing
+\begin{center}
+{\fontsize{16}{10}\selectfont\textbf{DEPARTMENT OF COMPUTER SCIENCE \& ENGINEERING}}\\
+{\fontsize{14}{14}\selectfont\textbf{SAHRDAYA COLLEGE OF ENGINEERING AND TECHNOLOGY, KODAKARA, THRISSUR}}\\
+\end{center}
+
+\begin{figure}[hbtp]
+\centering
+\includegraphics[scale=1.2]{sahrdaya_logo.png}
+\end{figure}
+
+\begin{center}
+{\fontsize{16}{16}\selectfont\textbf{BONAFIDE CERTIFICATE}}\\
+\end{center}
+
+\doublespacing
+This is to certify that the project report entitled \textbf{SAHRDAYA RAG X: A RETRIEVAL-AUGMENTED AI ASSISTANT FOR COLLEGE INFORMATION SYSTEMS} submitted by \textbf{YOUR NAME (ROLL NUMBER)} to the APJ Abdul Kalam Technological University in partial fulfillment of the requirements for the award of the Degree of Bachelor of Technology in Computer Science and Engineering is a bonafide record of the project work carried out under our guidance and supervision.
+
+\begin{flushright}
+\vspace{12pt}
+\singlespacing
+\textbf{PROJECT COORDINATOR} \\
+Name \\
+Assistant Professor \\
+\vspace{12pt}
+\textbf{HEAD OF THE DEPARTMENT} \\
+Name \\
+Professor
+\end{flushright}
+
+\begin{flushleft}
+\textbf{Kodakara}\\
+\textbf{Date: \today}
+\end{flushleft}
+\end{titlepage}
+
+% ACKNOWLEDGEMENT
+\newpage
+\pagestyle{plain}
+\addcontentsline{toc}{section}{\textnormal{\textbf{ACKNOWLEDGMENT}}}
+\begin{center}
+\section*{ACKNOWLEDGMENT}
+\end{center}
+\onehalfspacing
+I express my sincere gratitude to the management, principal, and faculty members of Sahrdaya College of Engineering \& Technology for their continuous support and guidance. I thank my guide and project coordinator for their valuable suggestions during each phase of this work. I also thank my friends and family for their motivation and encouragement throughout the project.
+
+% ABSTRACT
+\newpage
+\addcontentsline{toc}{section}{\textnormal{\textbf{ABSTRACT}}}
+\begin{center}
+\section*{\Large{\textbf{ABSTRACT}}}
+\end{center}
+\onehalfspacing
+Sahrdaya RAG X is a Retrieval-Augmented Generation based assistant designed to answer institution-specific queries for Sahrdaya College of Engineering and Technology. The system addresses a common limitation of generic chatbots: inaccurate or hallucinated responses for local college information. A complete pipeline is implemented with website scraping, preprocessing, semantic and lexical indexing, hybrid retrieval, SQL-based structured querying, and large language model generation. The scraper collects structured and raw content from the college website using threaded crawling with optional Playwright rendering for JavaScript-heavy pages. The preprocessing module cleans noisy content, detects categories, performs sentence-aware chunking, and injects search aliases to improve exact-name matching. Hybrid retrieval combines BM25 and FAISS vector search using weighted reciprocal rank fusion, followed by cross-encoder reranking to improve precision. For aggregate and tabular requests, a dedicated SQLite path is used with safe SELECT-only SQL generation. The system is available in both terminal and FastAPI modes, supports session-based chat history, streaming responses, local rate-limit management, and key failover. Empirical observations from the current dataset show improved relevance, lower startup latency through index caching, and consistent handling of both direct factual questions and list-oriented queries.
+
+% CONTENTS
+\newpage
+\pagestyle{empty}
+\begin{center}
+\tableofcontents
+\end{center}
+
+\newpage
+{\setlength{\baselineskip}{1\baselineskip}
+\begin{center}
+\listoftables
+\end{center}
+\addcontentsline{toc}{section}{LIST OF TABLES}
+}
+
+\newpage
+\pagestyle{plain}
+\begin{center}
+\section*{\large{ LIST OF ABBREVIATIONS}}
+\end{center}
+\addcontentsline{toc}{section}{LIST OF ABBREVIATIONS}
+\vspace{1cm}
+\begin{center}
+\begin{table}[h!]
+\begin{tabular}{p{6cm}p{8cm}}
+\textbf{ABBREVIATION} & \textbf{DESCRIPTION} \\
+RAG & Retrieval Augmented Generation \\
+LLM & Large Language Model \\
+BM25 & Best Matching 25 lexical ranking algorithm \\
+FAISS & Facebook AI Similarity Search \\
+API & Application Programming Interface \\
+SQL & Structured Query Language \\
+SSE & Server Sent Events \\
+MMR & Maximal Marginal Relevance \\
+SCET & Sahrdaya College of Engineering and Technology \\
+\end{tabular}
+\end{table}
+\end{center}
+
+\newpage
+\pagenumbering{arabic}
+\renewcommand{\chaptername}{CHAPTER}
+\renewcommand*{\thepage}{\footnotesize\arabic{page}}
+
+\chapter{INTRODUCTION}
+\thispagestyle{fancy}
+\onehalfspacing
+
+\setlength{\parindent}{5ex}
+\hspace*{1cm}Educational institutions publish information across many web pages, notices, and departmental sections. Students and parents often ask repetitive operational questions such as admission process, department contacts, placements, and faculty details. Traditional static FAQ pages are difficult to maintain and general-purpose language models may produce unverified answers for such local institutional content. This motivates a grounded conversational assistant that can retrieve and present reliable information directly from institution-approved sources.
+
+\section{GENERAL BACKGROUND}
+\hspace*{1cm}Retrieval-Augmented Generation (RAG) combines information retrieval and natural language generation. Instead of generating answers from model memory alone, the system first fetches relevant chunks from a curated knowledge source and then generates an answer grounded in those chunks. In Sahrdaya RAG X, data is obtained from \texttt{sahrdaya.ac.in}, cleaned and indexed, and then used for hybrid retrieval. The pipeline includes semantic search, lexical search, reranking, and controlled generation through a prompt designed for college-domain queries.
+
+\section{PROBLEM DEFINITION}
+\hspace*{1cm}The key problem is the absence of a single reliable conversational interface for SCET-specific information. Stakeholders currently navigate multiple pages and frequently encounter outdated or scattered details. A naive chatbot can also hallucinate responses, which is risky for academic and administrative information. The system must therefore ensure: (1) grounded responses, (2) strong retrieval for both exact names and conceptual questions, and (3) support for list and aggregate queries.
+
+\section{MOTIVATION}
+\hspace*{1cm}The motivation of this work is to provide a practical and maintainable AI assistant for college operations. The project aims to reduce search time for users, assist administrative communication, and demonstrate an applied RAG architecture with measurable retrieval quality improvements. The project also acts as a deployment-ready base with API, rate controls, and containerization support for institutional use.
+
+\section{OBJECTIVES}
+The objectives of this work are:
+\begin{itemize}
+    \item Build an end-to-end RAG pipeline using real SCET website content.
+    \item Implement robust preprocessing with sentence-aware chunking and category tagging.
+    \item Combine BM25 and FAISS retrieval with cross-encoder reranking.
+    \item Route suitable aggregate queries to a structured SQLite SQL path.
+    \item Provide both CLI and FastAPI interfaces with session-aware conversations.
+    \item Improve startup efficiency using persistent index caching.
+\end{itemize}
+
+\chapter{LITERATURE SURVEY}
+\thispagestyle{fancy}
+\onehalfspacing
+
+\hspace*{1cm}Recent question-answering systems use domain-specific retrieval to reduce hallucination. Lexical ranking techniques such as BM25 remain highly effective for exact-entity retrieval, while dense embeddings improve semantic matching for paraphrased queries. Hybrid retrieval strategies are now common because each method compensates for the limitations of the other.
+
+\hspace*{1cm}Cross-encoder reranking has been shown to increase precision by jointly scoring query-document pairs after initial retrieval. In addition, structured data paths using SQL are suitable for aggregation and tabular outputs where LLM-only answering is less reliable. The present project adopts these established ideas and integrates them into a practical assistant for the SCET domain.
+
+\chapter{PROPOSED SYSTEM}
+\thispagestyle{fancy}
+\onehalfspacing
+
+\hspace*{1cm}The proposed system consists of five major layers: data ingestion, preprocessing, dual indexing, query routing, and response generation. The ingestion layer uses a multi-threaded scraper with optional Playwright rendering to capture JavaScript-generated content. The preprocessing layer cleans noise, detects categories, and performs sentence-aware chunking. The indexing layer builds BM25 and FAISS stores with cache persistence. The runtime layer classifies user intent to choose SQL or RAG path. The output layer returns concise domain-grounded responses with optional metadata.
+
+\section{SYSTEM MODULES}
+\begin{table}[h!]
+\centering
+\caption{Core modules and functions in Sahrdaya RAG X}
+\begin{tabular}{|p{4.2cm}|p{9.4cm}|}
+\hline
+\textbf{Module} & \textbf{Role} \\
+\hline
+\texttt{scraper.py} & Multi-threaded crawling, Playwright rendering, and RAG-ready text export \\
+\hline
+\texttt{preprocess\_data.py} & Cleaning, category detection, sentence-aware split, alias injection \\
+\hline
+\texttt{faculty\_db.py} & Parse faculty/former-people entities and build SQLite database \\
+\hline
+\texttt{rag\_setup.py} & FAISS + BM25 index build, query expansion, reranking, prompt pipeline \\
+\hline
+\texttt{api/routes/chat.py} & Session APIs, chat endpoints, streaming, load and rate controls \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{WORKFLOW}
+\begin{enumerate}
+    \item Crawl SCET website content and store raw chunks.
+    \item Preprocess text and generate optimized \texttt{data\_cleaned.jsonl}.
+    \item Build or load cached BM25 and FAISS indexes.
+    \item Receive user query and classify SQL eligibility.
+    \item If SQL-type query, generate validated SELECT query and answer from SQLite.
+    \item Otherwise retrieve, rerank, and generate context-grounded answer using LLM.
+\end{enumerate}
+
+\chapter{DESIGN PHASE}
+\thispagestyle{fancy}
+\onehalfspacing
+
+\section{EQUATIONS}
+The lexical retriever follows BM25 ranking:
+\begin{equation}
+\text{BM25}(D,Q)=\sum_{i=1}^{n} IDF(q_i) \cdot \frac{f(q_i,D)(k_1+1)}{f(q_i,D)+k_1\left(1-b+b\frac{|D|}{avgdl}\right)}
+\end{equation}
+where $f(q_i,D)$ is term frequency of token $q_i$ in document $D$.
+
+For hybrid fusion, reciprocal rank fusion score is used:
+\begin{equation}
+\text{RRF}(d)=\sum_{r\in R}\frac{w_r}{k+\text{rank}_r(d)}
+\end{equation}
+where $w_r$ is retriever weight and $k$ is a smoothing constant.
+
+\section{ALGORITHM}
+\begin{algorithm}
+\caption{Query Handling in Sahrdaya RAG X}
+\begin{algorithmic}[1]
+\Procedure{HandleQuery}{$q$, history}
+\State $q_e \gets$ ExpandQuery($q$)
+\State $sql \gets$ ClassifyAndGenerateSQL($q$, history)
+\If{$sql \neq \emptyset$ and Validate($sql$)}
+    \State $rows \gets$ ExecuteSQL($sql$)
+    \If{$rows$ not empty}
+        \State \Return FormatSQLResult($rows$)
+    \EndIf
+\EndIf
+\State $C \gets$ RetrieveHybrid($q_e$) \Comment{BM25 + FAISS}
+\State $C' \gets$ CrossEncoderRerank($q, C$)
+\State \Return LLMGenerate($q$, history, TopK($C'$))
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\section{DATA ORGANIZATION}
+\begin{table}[h!]
+\centering
+\caption{Primary project artifacts}
+\begin{tabular}{|p{4cm}|p{4cm}|p{5.5cm}|}
+\hline
+\textbf{File} & \textbf{Type} & \textbf{Purpose} \\
+\hline
+\texttt{data.txt} & Raw text chunks & Website-scraped source content \\
+\hline
+\texttt{data\_cleaned.jsonl} & JSONL & Cleaned and chunked retrieval corpus \\
+\hline
+\texttt{faculty.db} & SQLite DB & Structured faculty and former-people records \\
+\hline
+\texttt{.index\_cache/} & Cache directory & Persistent BM25/FAISS index storage \\
+\hline
+\end{tabular}
+\end{table}
+
+\chapter{IMPLEMENTATION DETAILS}
+\thispagestyle{fancy}
+\onehalfspacing
+
+\section{SCRAPING AND INGESTION}
+The scraper supports sitemap-driven crawling, thread-safe visited URL tracking, and optional JavaScript rendering with Playwright. It produces multiple outputs including a RAG-ready file and URL-hash tracking metadata for change detection.
+
+\section{PREPROCESSING}
+Preprocessing removes UI noise, tags 18 semantic categories, and applies sentence-aware chunking with overlap to preserve meaning. Alias injection (e.g., concatenated name variants) improves lexical retrieval for name-based queries. Former-people sections are additionally structured role-wise to support complete list retrieval.
+
+\section{RETRIEVAL AND GENERATION}
+The runtime uses weighted hybrid retrieval (BM25: 0.6, Vector: 0.4), followed by cross-encoder reranking for relevance refinement. Query expansion enhances abbreviation handling (e.g., CSE, ECE, HOD). A prompt-constrained Groq model generates concise context-grounded answers.
+
+\section{API AND SESSION MANAGEMENT}
+The FastAPI server provides endpoints for chat, stream, health, readiness, load, and session operations. Session history is maintained in memory with configurable TTL. Additional controls include local token/request quota checks, max concurrency gating, and API key failover.
+
+\section{DEPLOYMENT}
+The project supports:
+\begin{itemize}
+    \item Direct local execution for CLI and API.
+    \item Single-container Docker deployment.
+    \item Nginx-based load-balanced deployment with three API replicas.
+\end{itemize}
+
+\chapter{REQUIREMENTS}
+\thispagestyle{fancy}
+\onehalfspacing
+
+\section{HARDWARE REQUIREMENTS}
+\begin{enumerate}
+    \item Processor: Intel Core i5 (or above) recommended.
+    \item RAM: 8 GB minimum (16 GB preferred for embedding/reranking comfort).
+    \item Storage: At least 2 GB free space for dependencies, models, and cache.
+\end{enumerate}
+
+\section{SOFTWARE REQUIREMENTS}
+\begin{enumerate}
+    \item Operating System: Windows, Linux, or macOS.
+    \item Language: Python 3.10+.
+    \item Core libraries: LangChain, FAISS, rank-bm25, sentence-transformers, FastAPI.
+    \item Supporting tools: Playwright (for JS pages), Docker, Nginx.
+    \item Frontend (optional): Next.js based UI for chat integration.
+\end{enumerate}
+
+\chapter{EXPERIMENTAL RESULTS AND OBSERVATIONS}
+\thispagestyle{fancy}
+\onehalfspacing
+
+\hspace*{1cm}The developed pipeline was validated on SCET website content processed into raw and cleaned corpora. The current system artifacts include approximately 785 raw chunks and about 2198 processed chunks. A structured SQLite faculty database stores around 110 faculty entries and additional former-people records.
+
+\hspace*{1cm}The first startup (index build path) takes significantly longer due to embedding and index creation, while subsequent startups leverage cache for near-instant loading. Hybrid retrieval plus reranking improved practical relevance for both exact-name and semantic queries. SQL routing produced clearer responses for aggregate/list requests compared with pure generation.
+
+\hspace*{1cm}Operationally, sessionized chat and streaming events improved usability, while local rate and concurrency controls improved API stability. Overall, the system satisfies the project objective of an institution-focused, grounded conversational assistant.
+
+\chapter{CONCLUSION AND FUTURE SCOPE}
+\thispagestyle{fancy}
+\onehalfspacing
+
+\hspace*{1cm}This project presents a complete and deployable RAG assistant for SCET. By combining robust ingestion, preprocessing, hybrid retrieval, reranking, and controlled answer generation, the system provides more reliable institution-specific responses than generic chatbot approaches.
+
+\hspace*{1cm}Future work includes multilingual support, metadata-level filtering, larger embedding models, persistent analytics dashboards, automated evaluation benchmarks, and improved frontend experience with richer source citations and user feedback loops.
+
+\chapter*{REFERENCES}
+\addcontentsline{toc}{chapter}{REFERENCES}
+\begin{thebibliography}{9}
+\bibitem{rag}
+P. Lewis et al., ``Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks,'' NeurIPS, 2020.
+
+\bibitem{bm25}
+S. Robertson and H. Zaragoza, ``The Probabilistic Relevance Framework: BM25 and Beyond,'' Foundations and Trends in Information Retrieval, 2009.
+
+\bibitem{faiss}
+J. Johnson, M. Douze, and H. Jegou, ``Billion-Scale Similarity Search with GPUs,'' IEEE Transactions on Big Data, 2019.
+
+\bibitem{crossencoder}
+N. Reimers and I. Gurevych, ``Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks,'' EMNLP-IJCNLP, 2019.
+
+\bibitem{fastapi}
+S. Ramirez, ``FastAPI Framework Documentation,'' \url{https://fastapi.tiangolo.com/}.
+\end{thebibliography}
+
+\appendix
+\chapter{API ENDPOINT SUMMARY}
+\begin{longtable}{|p{4cm}|p{2cm}|p{8cm}|}
+\hline
+\textbf{Endpoint} & \textbf{Method} & \textbf{Purpose} \\
+\hline
+\texttt{/api/chat} & POST & Standard chat response with optional metadata \\
+\hline
+\texttt{/api/chat/stream} & POST & Streaming response via server-sent events \\
+\hline
+\texttt{/api/sessions} & POST & Create new chat session \\
+\hline
+\texttt{/api/sessions/\{id\}/history} & GET & Retrieve conversation history \\
+\hline
+\texttt{/api/sessions/\{id\}} & DELETE & Delete session \\
+\hline
+\texttt{/api/health} & GET & Liveness check \\
+\hline
+\texttt{/api/ready} & GET & Readiness check \\
+\hline
+\texttt{/api/load} & GET & Current in-flight load status \\
+\hline
+\texttt{/api/limits} & GET & Local quota and key-pool status \\
+\hline
+\end{longtable}
+
+\end{document}

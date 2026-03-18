@@ -1,0 +1,14 @@
+.git/
+.github/
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.env
+venv/
+.venv/
+.index_cache/
+README_assets/

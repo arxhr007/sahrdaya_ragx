@@ -1,0 +1,305 @@
+import asyncio
+import json
+import re
+import time
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import StreamingResponse
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_groq import ChatGroq
+
+import rag_setup
+from api.core.models import ChatRequest, ChatResponse, LimitsResponse, LoadResponse, SessionCreateResponse
+from api.core.settings import get_settings
+from api.services.key_pool import KeyPool
+from api.services.load_control import LoadController
+from api.services.rate_limit_manager import RateLimitManager
+from api.services.session_store import SessionStore
+
+
+settings = get_settings()
+router = APIRouter(prefix="/api", tags=["chat"])
+
+session_store = SessionStore(ttl_seconds=settings.session_ttl_seconds)
+rate_manager = RateLimitManager(
+    rpm=settings.groq_rpm_limit,
+    tpm=settings.groq_tpm_limit,
+    rpd=settings.groq_rpd_limit,
+    tpd=settings.groq_tpd_limit,
+)
+key_pool = KeyPool(
+    keys=settings.parsed_keys(),
+    failure_threshold=settings.key_failure_threshold,
+    default_cooldown_seconds=settings.key_default_cooldown_seconds,
+)
+load_control = LoadController(
+    max_concurrent=settings.max_concurrent_requests,
+    queue_wait_seconds=settings.queue_wait_seconds,
+)
+
+
+def _extract_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out = []
+        for item in content:
+            if isinstance(item, str):
+                out.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if text:
+                    out.append(str(text))
+        return "".join(out)
+    return str(content)
+
+
+def _build_history_text(turns: list[dict]) -> str:
+    rows = []
+    for turn in turns:
+        role = turn.get("role", "user")
+        content = turn.get("content", "")
+        if role == "assistant":
+            rows.append(f"Assistant: {content}")
+        else:
+            rows.append(f"User: {content}")
+    return "\n".join(rows)
+
+
+def _parse_retry_after_seconds(error_text: str, default_value: int) -> int:
+    m = re.search(r"retry-after[^0-9]*(\d+)", error_text, re.IGNORECASE)
+    if m:
+        return max(1, int(m.group(1)))
+    return default_value
+
+
+def _clean_sql_result(result: str) -> str | None:
+    text = result.strip()
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        if text.lower().startswith("sql"):
+            text = text[3:].strip()
+    if text.upper() == "NOT_SQL" or not text.upper().startswith("SELECT"):
+        return None
+    return text
+
+
+async def _invoke_with_key_failover(coro_factory):
+    last_error = None
+    attempts = max(1, len(key_pool.snapshot()))
+
+    for _ in range(attempts):
+        key = key_pool.acquire()
+        if not key:
+            break
+        try:
+            result = await coro_factory(key)
+            key_pool.mark_success(key)
+            return result, key
+        except Exception as exc:
+            error_text = str(exc)
+            last_error = exc
+            if "429" in error_text or "rate limit" in error_text.lower():
+                retry_after = _parse_retry_after_seconds(error_text, settings.key_default_cooldown_seconds)
+                key_pool.mark_busy(key, cooldown_seconds=retry_after, reason="rate_limited")
+            else:
+                key_pool.mark_failure(key, reason=error_text[:120])
+
+    raise HTTPException(status_code=503, detail=f"No healthy API key available: {last_error}")
+
+
+async def _classify_sql(question: str, history_text: str) -> tuple[str | None, str]:
+    trimmed_history = history_text[-rag_setup._SQL_HISTORY_LIMIT:] if history_text else ""
+
+    async def _runner(key: str):
+        llm = ChatGroq(groq_api_key=key, model_name=settings.groq_model_id)
+        pv = rag_setup._SQL_CLASSIFY_PROMPT.invoke(
+            {
+                "schema": rag_setup._FACULTY_SCHEMA,
+                "question": question,
+                "chat_history": trimmed_history,
+            }
+        )
+        return await asyncio.to_thread(llm.invoke, pv.to_messages())
+
+    msg, key = await _invoke_with_key_failover(_runner)
+    raw = _extract_text(msg.content).strip()
+    return _clean_sql_result(raw), key
+
+
+async def _answer_rag(question: str, history_text: str, context_str: str) -> tuple[str, str]:
+    async def _runner(key: str):
+        llm = ChatGroq(groq_api_key=key, model_name=settings.groq_model_id)
+        base_prompt = rag_setup.prompt.invoke(
+            {"question": question, "chat_history": history_text, "context": context_str}
+        )
+        messages = list(base_prompt.to_messages())
+        parts: list[str] = []
+
+        for _ in range(settings.max_continuations + 1):
+            ai_msg = await asyncio.to_thread(llm.invoke, messages)
+            text = _extract_text(ai_msg.content)
+            if text:
+                parts.append(text)
+            finish_reason = (ai_msg.response_metadata or {}).get("finish_reason")
+            if finish_reason not in {"length", "max_tokens"}:
+                break
+            messages.extend(
+                [
+                    AIMessage(content=text),
+                    HumanMessage(content="Continue exactly from where you stopped. Do not repeat."),
+                ]
+            )
+
+        return "".join(parts)
+
+    answer, key = await _invoke_with_key_failover(_runner)
+    return answer, key
+
+
+async def _process_chat(req: ChatRequest, session_id: str) -> ChatResponse:
+    acquired = await load_control.acquire()
+    if not acquired:
+        raise HTTPException(status_code=503, detail="Server busy, queue timeout reached")
+
+    t0 = time.time()
+    try:
+        session_store.cleanup()
+        turns = session_store.get_turns(session_id)
+        history_text = _build_history_text(turns)
+
+        est_tokens = rate_manager.estimate_tokens(req.message + history_text)
+        allowed, retry_after = rate_manager.can_consume(est_tokens)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limited locally. Retry after ~{int(retry_after)} seconds.",
+            )
+
+        sql_query, key_for_sql = await _classify_sql(req.message, history_text)
+        mode = "rag"
+        answer = ""
+        chunk_ids: list[str] = []
+        num_docs = 0
+        context_tokens = 0
+        key_hint = KeyPool.key_hint(key_for_sql)
+
+        if sql_query and rag_setup.validate_faculty_sql(sql_query):
+            sql_result = rag_setup.execute_faculty_sql(sql_query)
+            if sql_result:
+                cols, rows = sql_result
+                if rows:
+                    answer = rag_setup.format_sql_results(cols, rows, req.message)
+                    mode = "sql"
+
+        if not answer:
+            context_str, chunk_ids, num_docs = rag_setup.retrieve_with_metadata(req.message)
+            context_tokens = rate_manager.estimate_tokens(context_str)
+            answer, key_used = await _answer_rag(req.message, history_text, context_str)
+            key_hint = KeyPool.key_hint(key_used)
+
+        session_store.append_turn(session_id, "user", req.message)
+        session_store.append_turn(session_id, "assistant", answer)
+
+        prompt_tokens = rate_manager.estimate_tokens(req.message)
+        response_tokens = rate_manager.estimate_tokens(answer)
+        history_tokens = rate_manager.estimate_tokens(history_text)
+        rate_manager.consume(prompt_tokens + response_tokens + history_tokens + context_tokens)
+
+        elapsed = time.time() - t0
+        metadata = {
+            "mode": mode,
+            "response_time": elapsed,
+            "prompt_tokens": prompt_tokens,
+            "response_tokens": response_tokens,
+            "history_tokens": history_tokens,
+            "context_tokens": context_tokens,
+            "num_docs": num_docs,
+            "chunk_ids": chunk_ids,
+            "key_used_hint": key_hint,
+        }
+
+        return ChatResponse(
+            session_id=session_id,
+            answer=answer,
+            metadata=metadata if req.include_metadata else None,
+        )
+    finally:
+        await load_control.release()
+
+
+@router.get("/health")
+async def health() -> dict:
+    return {"status": "ok"}
+
+
+@router.get("/ready")
+async def ready() -> dict:
+    keys_available = any(not k["busy"] for k in key_pool.snapshot())
+    return {"ready": keys_available}
+
+
+@router.get("/load", response_model=LoadResponse)
+async def load() -> LoadResponse:
+    snap = await load_control.snapshot()
+    return LoadResponse(**snap)
+
+
+@router.get("/limits", response_model=LimitsResponse)
+async def limits() -> LimitsResponse:
+    snap = rate_manager.snapshot()
+    snap["keys"] = key_pool.snapshot()
+    return LimitsResponse(**snap)
+
+
+@router.post("/sessions", response_model=SessionCreateResponse)
+async def create_session() -> SessionCreateResponse:
+    session_store.cleanup()
+    sid = session_store.create()
+    return SessionCreateResponse(session_id=sid)
+
+
+@router.get("/sessions/{session_id}/history")
+async def session_history(session_id: str) -> dict:
+    turns = session_store.get_turns(session_id)
+    if turns == [] and not session_store.exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session_id": session_id, "turns": turns}
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str) -> Response:
+    deleted = session_store.clear(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return Response(status_code=204)
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest) -> ChatResponse:
+    session_store.cleanup()
+    session_id = session_store.get_or_create(req.session_id)
+    return await _process_chat(req, session_id)
+
+
+@router.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    session_store.cleanup()
+    session_id = session_store.get_or_create(req.session_id)
+    response = await _process_chat(req, session_id)
+
+    async def events():
+        payload = {"session_id": response.session_id}
+        yield f"event: started\\ndata: {json.dumps(payload)}\\n\\n"
+
+        text = response.answer
+        step = 500
+        for i in range(0, len(text), step):
+            chunk = text[i : i + step]
+            yield f"event: token\\ndata: {json.dumps({'text': chunk})}\\n\\n"
+            await asyncio.sleep(0)
+
+        yield f"event: completed\\ndata: {json.dumps(response.model_dump())}\\n\\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
