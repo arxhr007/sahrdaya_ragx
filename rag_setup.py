@@ -425,8 +425,62 @@ _sql_classify_chain = _SQL_CLASSIFY_PROMPT | llm | StrOutputParser()
 _SQL_HISTORY_LIMIT = 1500
 
 
+def _is_bulk_faculty_or_former_query(question: str) -> bool:
+    """Gate SQL usage to explicit BULK faculty/former-people intents only.
+
+    This prevents broad department questions (e.g., "what are things in CSE")
+    from being routed to SQL.
+    """
+    q = question.lower().strip()
+
+    # Must look like a bulk/list/filter/count intent.
+    bulk_intent_patterns = [
+        r"\blist\b",
+        r"\bshow\b",
+        r"\bgive\b",
+        r"\ball\b",
+        r"\bhow many\b",
+        r"\bcount\b",
+        r"\bwho are\b",
+        r"\bfaculty with\b",
+        r"\bfaculties with\b",
+        r"\bformer\b",
+        r"\bpast\b",
+        r"\bprevious\b",
+    ]
+    has_bulk_intent = any(re.search(p, q) for p in bulk_intent_patterns)
+    if not has_bulk_intent:
+        return False
+
+    # Must explicitly target faculty/staff OR former people concepts.
+    target_entity_patterns = [
+        r"\bfaculty\b",
+        r"\bfaculties\b",
+        r"\bprofessor\b",
+        r"\bprofessors\b",
+        r"\bteacher\b",
+        r"\bteachers\b",
+        r"\bstaff\b",
+        r"\bhods\b",
+        r"\bformer\b",
+        r"\bpast\b",
+        r"\bprevious\b",
+        r"\bformer people\b",
+        r"\bformer principals\b",
+        r"\bformer vice principals\b",
+        r"\bformer managers\b",
+        r"\bformer directors\b",
+    ]
+    has_target_entity = any(re.search(p, q) for p in target_entity_patterns)
+    return has_target_entity
+
+
 def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str | None:
     """Ask the LLM if this question needs SQL. Returns SQL string or None."""
+    # Hard gate: only attempt SQL for explicit bulk faculty/former-people asks.
+    if not _is_bulk_faculty_or_former_query(question):
+        return None
+
     # Truncate history to avoid blowing the token limit — the classifier
     # only needs recent conversational context, not full SQL result tables.
     trimmed_history = chat_history_text[-_SQL_HISTORY_LIMIT:] if chat_history_text else ""
