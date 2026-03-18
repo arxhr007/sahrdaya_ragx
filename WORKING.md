@@ -948,6 +948,72 @@ The sparkline is particularly useful for spotting latency spikes across a sessio
 
 ---
 
+## Deployment Pipeline (Container Runtime)
+
+The project ships with a deployment pipeline that turns source code into a health-gated multi-replica API service behind Nginx.
+
+```mermaid
+flowchart TD
+  A[Git push or local code update] --> B[Build image from Dockerfile]
+  B --> C[Compose starts rag-api-1, rag-api-2, rag-api-3]
+  C --> D[Per-container health check: GET /api/health]
+  D --> E{Healthy replicas available?}
+  E -->|Yes| F[Nginx starts and joins network]
+  E -->|No| G[Replica excluded from traffic]
+  F --> H[Least-conn load balancing on :8080]
+  H --> I[Client requests proxied to healthy backends]
+```
+
+### Runtime Components
+
+| Component | File | Responsibility |
+|---|---|---|
+| API image | `Dockerfile` | Builds the FastAPI runtime and app code |
+| Single-node compose | `docker-compose.yml` | One API container for simple deployments |
+| LB compose | `docker-compose.nginx.yml` | Three API replicas + one Nginx proxy |
+| Nginx LB config | `deploy/nginx-docker.conf` | Upstream pool, least-conn policy, proxy headers/timeouts |
+
+### Health-Gated Startup
+
+Each API replica runs a health probe:
+
+- Probe target: `http://127.0.0.1:8000/api/health`
+- Interval: 15s
+- Timeout: 5s
+- Retries: 20
+- Start period: 120s
+
+Nginx is configured with compose-level health dependencies, so traffic starts only after backends are healthy.
+
+### Release / Redeploy Flow
+
+```bash
+docker compose -f docker-compose.nginx.yml build
+docker compose -f docker-compose.nginx.yml up -d
+docker compose -f docker-compose.nginx.yml ps
+docker compose -f docker-compose.nginx.yml logs -f
+```
+
+Operational behavior:
+
+1. New images are built from the latest source.
+2. Containers are recreated with updated images.
+3. Unhealthy replicas do not receive traffic.
+4. Nginx continues routing to healthy replicas.
+
+### CI/CD Mapping
+
+For automation (for example, GitHub Actions), map jobs directly to the same runtime pipeline:
+
+1. Build stage: container build from `Dockerfile`.
+2. Deploy stage: `docker compose -f docker-compose.nginx.yml up -d`.
+3. Verify stage: probe `/api/health` through `:8080`.
+4. Fail-fast rule: mark deployment failed if health checks do not pass.
+
+This keeps local deployment and CI/CD deployment behavior consistent.
+
+---
+
 ## Summary of Methods
 
 ```mermaid

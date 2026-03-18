@@ -324,6 +324,66 @@ Docker files added:
 - `docker-compose.nginx.yml`
 - `deploy/nginx-docker.conf`
 
+## Deployment Pipeline
+
+This repo already includes an end-to-end deployment path from source code to a health-gated, load-balanced runtime.
+
+```mermaid
+flowchart LR
+     A[Code changes] --> B[Build API image from Dockerfile]
+     B --> C[Start rag-api-1, rag-api-2, rag-api-3]
+     C --> D[Health checks on /api/health]
+     D --> E{All healthy?}
+     E -->|Yes| F[Start Nginx reverse proxy]
+     E -->|No| G[Keep service out of traffic]
+     F --> H[Serve traffic on :8080]
+```
+
+### Pipeline Stages
+
+1. Build
+    - Command: `docker compose -f docker-compose.nginx.yml build`
+    - Source: `Dockerfile`
+
+2. Deploy
+    - Command: `docker compose -f docker-compose.nginx.yml up -d`
+    - Starts 3 API containers and 1 Nginx container
+
+3. Health gate
+    - Each API replica must pass `GET /api/health`
+    - Nginx waits for healthy replicas via `depends_on: condition: service_healthy`
+
+4. Traffic serving
+    - Nginx listens on `:8080`
+    - Requests are balanced across `rag-api-1`, `rag-api-2`, and `rag-api-3` using least-connections
+
+5. Verify
+    - `curl http://127.0.0.1:8080/api/health`
+    - `docker compose -f docker-compose.nginx.yml ps`
+    - `docker compose -f docker-compose.nginx.yml logs -f`
+
+### Update Rollout (safe restart)
+
+When you push code updates:
+
+```bash
+docker compose -f docker-compose.nginx.yml build
+docker compose -f docker-compose.nginx.yml up -d
+docker compose -f docker-compose.nginx.yml ps
+```
+
+This rebuilds images, recreates containers, and only sends traffic to healthy API instances.
+
+### Optional CI/CD Trigger
+
+If you connect this to GitHub Actions, use this same sequence as your deploy job on `main` branch pushes:
+
+1. Checkout code
+2. Build images (`docker compose ... build`)
+3. Deploy (`docker compose ... up -d`)
+4. Health probe (`/api/health`)
+5. Fail job if health probe fails
+
 ## CLI Commands
 
 | Command | Description |
