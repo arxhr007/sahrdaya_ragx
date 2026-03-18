@@ -20,10 +20,10 @@ RAG:               Question ──▶ Search relevant docs ──▶ LLM (reads 
 
 ```mermaid
 flowchart LR
-    A[🌐 College Website] -->|scraper.py| B[📄 sahrdaya_rag.txt]
-  SCSV[🧾 students.csv] -->|student_db.py| I[🗃️ college.db]
-    B -->|preprocess_data.py| C[📦 data_cleaned.jsonl]
-    B -->|sql_db_setup.py| I[🗃️ college.db]
+    A[🌐 College Website] -->|scraper.py| B[📄 data/raw/sahrdaya_rag.txt]
+  SCSV[🧾 data/students.csv] -->|student_db.py| I[🗃️ data/sql/college.db]
+    B -->|preprocess_data.py| C[📦 data/processed/data_cleaned.jsonl]
+    B -->|sql_db_setup.py| I[🗃️ data/sql/college.db]
     C -->|rag_setup.py| D[🔍 BM25 Index]
     C -->|rag_setup.py| E[🧠 FAISS Vector Index]
     F[❓ User Query] --> G{🧠 LLM Classifier}
@@ -64,7 +64,7 @@ flowchart TD
     C --> E[Multi-threaded Playwright scraping]
     D --> E
     E --> F[Extract text from each page]
-    F --> G[sahrdaya_rag.txt - one chunk per line]
+    F --> G[data/raw/sahrdaya_rag.txt - one chunk per line]
     F --> H[structured JSON]
     F --> I[URL tracking with hashes]
 ```
@@ -105,12 +105,12 @@ The scraper produces four output files:
 
 | File | Format | Purpose |
 |---|---|---|
-| `<prefix>_rag.txt` | `chunk_id\tcontent` per line | Primary input for the RAG pipeline (`sahrdaya_rag.txt`) |
+| `<prefix>_rag.txt` | `chunk_id\tcontent` per line | Primary input for the RAG pipeline (`data/raw/sahrdaya_rag.txt`) |
 | `<prefix>_raw.txt` | Combined raw text | Full text dump for debugging |
 | `<prefix>_structured.json` | Structured JSON (via Groq or local fallback) | Rich page metadata |
 | `<prefix>_tracking.json` | URL → hash + chunk mappings | Change detection on re-scrape |
 
-**Output**: `sahrdaya_rag.txt` — ~785 raw chunks, one per line.
+**Output**: `data/raw/sahrdaya_rag.txt` — ~785 raw chunks, one per line.
 
 ---
 
@@ -120,7 +120,7 @@ Raw scraped text is noisy and unevenly sized. The preprocessor transforms it int
 
 ```mermaid
 flowchart TD
-    A[sahrdaya_rag.txt - 785 raw chunks] --> B[ Text Cleaning]
+    A[data/raw/sahrdaya_rag.txt - 785 raw chunks] --> B[ Text Cleaning]
     B --> C[ Category Detection]
     C --> FP{Former People chunk?}
     FP -->|Yes| FPS[ Role-Based Parsing]
@@ -131,7 +131,7 @@ flowchart TD
     D -->|≤ 910 chars| F[Keep as-is]
     E --> G[ Search Alias Injection per sub-chunk]
     F --> G
-    G --> H[data_cleaned.jsonl - 2198 optimised chunks]
+    G --> H[data/processed/data_cleaned.jsonl - 2198 optimised chunks]
 ```
 
 ### 2.1 Text Cleaning
@@ -312,7 +312,7 @@ The processed chunks are loaded into **two complementary search indexes**. This 
 
 ```mermaid
 flowchart TD
-    A[data_cleaned.jsonl - ~2.2K chunks] --> B[Load as LangChain Documents]
+    A[data/processed/data_cleaned.jsonl - ~2.2K chunks] --> B[Load as LangChain Documents]
     B --> C[FAISS Vector Index]
     B --> D[BM25 Lexical Index]
     
@@ -320,7 +320,7 @@ flowchart TD
     D --> F["How: Tokenise each chunk into lowercase words\nBuild TF-IDF statistics across all chunks"]
 ```
 
-> **Fallback**: If `data_cleaned.jsonl` doesn't exist (first run without preprocessing), the system falls back to loading `sahrdaya_rag.txt` directly with `RecursiveCharacterTextSplitter` (chunk_size=700, overlap=150). This produces unoptimised chunks — run `preprocess_data.py` for best results.
+> **Fallback**: If `data/processed/data_cleaned.jsonl` doesn't exist (first run without preprocessing), the system falls back to loading `data/raw/sahrdaya_rag.txt` directly with `RecursiveCharacterTextSplitter` (chunk_size=700, overlap=150). This produces unoptimised chunks — run `preprocess_data.py` for best results.
 
 ### 3.1 FAISS Vector Index (Semantic Search)
 
@@ -387,7 +387,7 @@ flowchart TD
     A[Startup] --> B{Cache exists?}
     B -->|No| C[Build FAISS + BM25 from scratch ~50s]
     C --> D[Save to .index_cache/]
-    D --> E[Save MD5 hash of data_cleaned.jsonl]
+    D --> E[Save MD5 hash of data/processed/data_cleaned.jsonl]
     B -->|Yes| F{MD5 hash matches?}
     F -->|Yes| G["Load from cache ~0.1s"]
     F -->|No| C
@@ -402,11 +402,11 @@ flowchart TD
 ├── faiss/              # FAISS vector index (saved with vectorstore.save_local())
 ├── bm25.pkl            # BM25 retriever (k=8), pickled
 ├── bm25_large.pkl      # BM25 retriever (k=50), pickled
-└── data_hash.txt       # MD5 hash of data_cleaned.jsonl
+└── data_hash.txt       # MD5 hash of data/processed/data_cleaned.jsonl
 ```
 
 **How invalidation works:**
-1. On each startup, compute the **MD5 hash** of `data_cleaned.jsonl`
+1. On each startup, compute the **MD5 hash** of `data/processed/data_cleaned.jsonl`
 2. Compare it with the hash stored in `data_hash.txt`
 3. If they match → load cached indexes (fast path)
 4. If they differ → rebuild everything from scratch and update the cache
@@ -644,7 +644,7 @@ Single-person faculty queries like "who is the HOD of CSE" are **not** routed to
 
 ### Former People — SQL Table
 
-Former people (past Chairmen, Managers, Principals, Vice Principals, etc.) are stored in a dedicated `former_people` table in `college.db`. The LLM classifier routes "former" queries to SQL just like bulk faculty queries — no special regex bypass needed.
+Former people (past Chairmen, Managers, Principals, Vice Principals, etc.) are stored in a dedicated `former_people` table in `data/sql/college.db`. The LLM classifier routes "former" queries to SQL just like bulk faculty queries — no special regex bypass needed.
 
 ```
 User: "list all former Principals"
@@ -652,11 +652,11 @@ User: "list all former Principals"
 → SQL returns 4 rows: Dr. Nixon Kuruvila, Dr. Sudha George Valavi, Prof. K T Joseph, Dr. M S Jayadeva
 ```
 
-The `former_people` table has 52 records across 10 roles (Chairman, Manager, Executive Director, Finance Officer, Advisor, Director, Principal, Vice Principal, Media Director, College Chairpersons). It is built by `sql_db_setup.py` by parsing the "Former People" section of `sahrdaya_rag.txt`.
+The `former_people` table has 52 records across 10 roles (Chairman, Manager, Executive Director, Finance Officer, Advisor, Director, Principal, Vice Principal, Media Director, College Chairpersons). It is built by `sql_db_setup.py` by parsing the "Former People" section of `data/raw/sahrdaya_rag.txt`.
 
 ### Student Profiles + Interests — SQL Tables
 
-Student data is loaded from `students.csv` into three normalized tables in `college.db`:
+Student data is loaded from `data/students.csv` into three normalized tables in `data/sql/college.db`:
 
 - `students` (profile columns including `bio`, `photo_url`, `projects_links`, social links)
 - `interests` (canonical interest dictionary)
@@ -696,7 +696,7 @@ flowchart TD
   A1 -->|Yes| A2["Direct student SQL lookup"]
   A1 -->|No| B["Groq LLM: Classify + Generate SQL"]
   B --> C{SQL or NOT_SQL?}
-  C -->|SQL| D["Execute on college.db\n(faculty / former_people / students + interests)"]
+  C -->|SQL| D["Execute on data/sql/college.db\n(faculty / former_people / students + interests)"]
   D --> E{Success?}
   E -->|Yes| F["Format SQL output\n(profile or table)"]
   E -->|No| G["Fallback to RAG pipeline"]
@@ -708,7 +708,7 @@ flowchart TD
 
 ### How the Shared Database is Built
 
-`sql_db_setup.py` parses raw `sahrdaya_rag.txt` and builds faculty + former people tables, then invokes `student_db.py` to load student profiles/interests from `students.csv` into the same `college.db`.
+`sql_db_setup.py` parses raw `data/raw/sahrdaya_rag.txt` and builds faculty + former people tables, then invokes `student_db.py` to load student profiles/interests from `data/students.csv` into the same `data/sql/college.db`.
 
 Faculty parsing is now format-tolerant:
 - Legacy rich profile blocks (`Back to Faculty Directory`)
@@ -720,10 +720,10 @@ Faculty parsing is now format-tolerant:
 
 ```mermaid
 flowchart TD
-    A[sahrdaya_rag.txt - raw chunks] --> B[Parse legacy profile blocks]
+    A[data/raw/sahrdaya_rag.txt - raw chunks] --> B[Parse legacy profile blocks]
     A --> C[Parse listing/card entries]
     A --> FP[Parse former people section]
-  SCSV[students.csv] --> ST[Normalize + canonicalize interests]
+  SCSV[data/students.csv] --> ST[Normalize + canonicalize interests]
     B --> D[Faculty candidates]
     C --> E[Faculty candidates]
     FP --> FPR[52 former people records]
@@ -732,7 +732,7 @@ flowchart TD
     F --> G["faculty table — ~109 records, 16 columns"]
     FPR --> H["former_people table — 52 records, 4 columns"]
   ST --> ST2["students + interests + student_interests"]
-    G --> I[college.db]
+    G --> I[data/sql/college.db]
     H --> I
   ST2 --> I
 ```
@@ -866,7 +866,7 @@ flowchart TD
     FM -->|Yes| I
     FM -->|No| D[SQL Classification]
     D --> E{SQL query generated?}
-    E -->|Yes| F[Execute SQL on college.db]
+    E -->|Yes| F[Execute SQL on data/sql/college.db]
     F --> G{SQL succeeded?}
     G -->|Yes| H[Display markdown table + SQL query]
     G -->|No| I["Fallback: RAG pipeline"]

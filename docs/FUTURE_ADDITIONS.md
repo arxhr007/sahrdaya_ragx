@@ -6,13 +6,13 @@ Things to fix, improve, and add to the RAG pipeline.
 
 ## Critical Fixes
 
-- ✅ (DONE) **Persistent vector index** — FAISS index saved to `.index_cache/faiss/` with `vectorstore.save_local()`. Reloads in ~0.1s instead of rebuilding in ~50s. Cache invalidates automatically when `data_cleaned.jsonl` changes (MD5 hash check)
+- ✅ (DONE) **Persistent vector index** — FAISS index saved to `.index_cache/faiss/` with `vectorstore.save_local()`. Reloads in ~0.1s instead of rebuilding in ~50s. Cache invalidates automatically when `data/processed/data_cleaned.jsonl` changes (MD5 hash check)
 - ✅ (DONE) **BM25 index persistence** — BM25 retrievers serialized to `.index_cache/bm25.pkl` with `pickle`. Loaded on subsequent runs, skipping full rebuild
 - ✅ (DONE) **`.gitignore`** — Added with entries for `.index_cache/`, `__pycache__/`, `.env`, `venv/`, IDE folders, OS files, and debug scripts
-- ✅ (DONE) **Shared SQL database build pipeline** — `sql_db_setup.py` now orchestrates `faculty_extractor.py`, `former_people_extractor.py`, and `student_db.py` into `college.db`. Faculty parsing supports both legacy profile blocks and listing/card chunks
+- ✅ (DONE) **Shared SQL database build pipeline** — `sql_db_setup.py` now orchestrates `faculty_extractor.py`, `former_people_extractor.py`, and `student_db.py` into `data/sql/college.db`. Faculty parsing supports both legacy profile blocks and listing/card chunks
 - ✅ (DONE) **SQL query routing** — LLM-based classifier in `rag_setup.py` routes bulk faculty queries to SQL and single-person/general queries to RAG. Includes schema-aware prompt, safety (SELECT-only), and automatic fallback to RAG on SQL failure
 - ✅ (DONE) **Session analytics CLI** — `main.py` tracks per-query stats (response time, tokens, chunks) and provides `/graph` dashboard with ASCII bar charts, sparklines, chunk heatmaps, and context growth visualisation
-- ✅ (DONE) **Index cache invalidation** — MD5 hash of `data_cleaned.jsonl` stored alongside cached indexes. Automatically rebuilds when data changes
+- ✅ (DONE) **Index cache invalidation** — MD5 hash of `data/processed/data_cleaned.jsonl` stored alongside cached indexes. Automatically rebuilds when data changes
 
 ---
 
@@ -30,7 +30,7 @@ Things to fix, improve, and add to the RAG pipeline.
 
 - 🔶 (Pending) **Hierarchical chunking** — Currently chunks are flat. Parent-child chunking (retrieve child, expand to parent for context) would give the LLM more surrounding context without bloating retrieval
 - 🔶 (Pending) **Table-aware parsing** — Faculty tables and timetables should be parsed into structured formats, not treated as plain text. A dedicated table extractor would improve accuracy
-- 🔶 (Pending) **Incremental preprocessing** — When a single page is re-scraped, currently the entire `data_cleaned.jsonl` is regenerated. Should only reprocess changed chunks (use tracking hashes from scraper)
+- 🔶 (Pending) **Incremental preprocessing** — When a single page is re-scraped, currently the entire `data/processed/data_cleaned.jsonl` is regenerated. Should only reprocess changed chunks (use tracking hashes from scraper)
 - 🔶 (Pending) **Deduplication** — Some pages have overlapping content. Add chunk-level deduplication (e.g., MinHash or exact hash) to remove near-duplicate chunks before indexing
 
 ---

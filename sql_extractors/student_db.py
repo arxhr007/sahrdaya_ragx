@@ -1,5 +1,5 @@
 """
-student_db.py — Ingest students.csv into shared college.db.
+student_db.py — Ingest data/students.csv into shared data/sql/college.db.
 
 Creates and maintains three tables:
 - students
@@ -16,7 +16,7 @@ import re
 import sqlite3
 from typing import Iterable
 
-STUDENTS_CSV = "students.csv"
+STUDENTS_CSV = "data/students.csv"
 
 CREATE_STUDENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS students (
@@ -154,7 +154,7 @@ def _iter_student_rows(csv_path: str) -> Iterable[dict]:
 
 
 def load_students_into_connection(conn: sqlite3.Connection, csv_path: str = STUDENTS_CSV) -> dict:
-    """Load students.csv into students/interests tables using canonical interests.
+    """Load data/students.csv into students/interests tables using canonical interests.
 
     Returns counters for diagnostics.
     """

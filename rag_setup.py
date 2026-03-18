@@ -19,7 +19,7 @@ import time
 import sqlite3
 from sentence_transformers import CrossEncoder
 
-from student_db import ensure_student_data
+from sql_extractors.student_db import ensure_student_data
 
 # ============ QUERY EXPANSION ============
 
@@ -51,10 +51,10 @@ def expand_query(question: str) -> str:
 
 
 # ============ LOAD PRE-PROCESSED DATA ============
-# Expects data_cleaned.jsonl produced by  python preprocess_data.py
+# Expects data/processed/data_cleaned.jsonl produced by python preprocess_data.py
 
-CLEANED_FILE = "data_cleaned.jsonl"
-RAW_FILE     = "sahrdaya_rag.txt"
+CLEANED_FILE = "data/processed/data_cleaned.jsonl"
+RAW_FILE     = "data/raw/sahrdaya_rag.txt"
 
 # Keep raw text for direct faculty extraction
 raw_docs_text = ""
@@ -82,7 +82,7 @@ if os.path.exists(CLEANED_FILE):
     print(f"[*] Loaded {len(docs)} optimized chunks (already cleaned + re-chunked)")
 else:
     print(f"[!] {CLEANED_FILE} not found — run:  python preprocess_data.py")
-    print("[*] Falling back to raw sahrdaya_rag.txt loading...")
+    print("[*] Falling back to raw data/raw/sahrdaya_rag.txt loading...")
     from langchain_community.document_loaders import DirectoryLoader, TextLoader
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     loader = DirectoryLoader(".", glob="*.txt", loader_cls=TextLoader, loader_kwargs={'encoding': 'utf-8'})
@@ -106,7 +106,7 @@ HASH_FILE        = os.path.join(CACHE_DIR, "data_hash.txt")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 def _data_hash() -> str:
-    """Hash of data_cleaned.jsonl to detect when data changes."""
+    """Hash of data/processed/data_cleaned.jsonl to detect when data changes."""
     h = hashlib.md5()
     with open(CLEANED_FILE, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
@@ -293,11 +293,11 @@ INSTRUCTIONS:
 
 # ============ FACULTY SQL DATABASE ============
 
-FACULTY_DB = "college.db"
+FACULTY_DB = "data/sql/college.db"
 
 # Build DB on first import if it doesn't exist
 if not os.path.exists(FACULTY_DB):
-    print("[*] college.db not found — building from sahrdaya_rag.txt...")
+    print("[*] data/sql/college.db not found — building from data/raw/sahrdaya_rag.txt...")
     from sql_db_setup import build_db
     build_db(FACULTY_DB)
 else:
@@ -309,7 +309,7 @@ else:
     ).fetchone()[0]
     if not _has_former:
         _conn.close()
-        print("[*] former_people table missing — rebuilding college.db...")
+        print("[*] former_people table missing — rebuilding data/sql/college.db...")
         os.remove(FACULTY_DB)
         from sql_db_setup import build_db
         build_db(FACULTY_DB)
@@ -333,7 +333,7 @@ _conn.close()
 if _student_stats.get("csv_found"):
     print(f"[*] Student data loaded ({_scnt} students, {_icnt} canonical interests, {_sicnt} links)")
 else:
-    print("[*] students.csv not found — student tables ready (0 rows loaded)")
+    print("[*] data/students.csv not found — student tables ready (0 rows loaded)")
 
 # ── Schema description for LLM ──────────────────────────────────────────────────
 
@@ -366,7 +366,7 @@ COLUMNS:
   start_year INTEGER     -- year they started the role
   end_year   INTEGER     -- year they ended the role
 
-TABLE 3: students  (student profiles from students.csv)
+TABLE 3: students  (student profiles from data/students.csv)
 COLUMNS:
     id                 INTEGER PRIMARY KEY
     timestamp          TEXT        -- form submission timestamp
@@ -752,7 +752,7 @@ def validate_faculty_sql(sql: str) -> bool:
 
 
 def execute_faculty_sql(sql: str) -> tuple[list[str], list[tuple]] | None:
-    """Execute a read-only SQL query on college.db. Returns (column_names, rows) or None on error."""
+    """Execute a read-only SQL query on data/sql/college.db. Returns (column_names, rows) or None on error."""
     # Safety: only allow SELECT
     if not sql.strip().upper().startswith("SELECT"):
         return None

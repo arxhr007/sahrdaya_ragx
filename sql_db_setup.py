@@ -15,17 +15,17 @@ import os
 import sqlite3
 import sys
 
-from faculty_extractor import insert_faculty, parse_listing_pages, parse_profiles
-from former_people_extractor import insert_former_people, parse_former_people
-from student_db import load_students_into_connection
+from sql_extractors.faculty_extractor import insert_faculty, parse_listing_pages, parse_profiles
+from sql_extractors.former_people_extractor import insert_former_people, parse_former_people
+from sql_extractors.student_db import load_students_into_connection
 
-RAW_FILE = "sahrdaya_rag.txt"
-DB_FILE = "college.db"
+RAW_FILE = "data/raw/sahrdaya_rag.txt"
+DB_FILE = "data/sql/college.db"
 MIN_PROFILE_PARSE_WARN = 20
 
 
 def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
-    """Parse sahrdaya_rag.txt + students.csv and create/rebuild a shared SQLite DB."""
+    """Parse data/raw/sahrdaya_rag.txt + data/students.csv and create/rebuild a shared SQLite DB."""
     if not os.path.exists(raw_path):
         print(f"[!] {raw_path} not found")
         return 0
@@ -56,6 +56,8 @@ def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
     print(f"[*] Parsed {len(former)} former people records")
 
     # 4) Write all entities to ONE shared DB file
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
     if os.path.exists(db_path):
         os.remove(db_path)
 
@@ -90,14 +92,14 @@ def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
     cur.execute("SELECT COUNT(*) FROM student_interests")
     student_interest_links = cur.fetchone()[0]
 
-    print(f"\n[*] college.db built — {total} faculty + {former_total} former people")
+    print(f"\n[*] data/sql/college.db built — {total} faculty + {former_total} former people")
     print(f"    PhDs: {phd_count}  |  PhD pursuing: {pursuing_count}")
     if student_stats.get("csv_found"):
         print(
             f"    Students: {students_total}  |  Canonical interests: {interests_total}  |  Links: {student_interest_links}"
         )
     else:
-        print("    Students: students.csv not found (student tables created, no rows loaded)")
+        print("    Students: data/students.csv not found (student tables created, no rows loaded)")
     print("    Departments:")
     for dept, count in dept_counts:
         print(f"      {dept}: {count}")

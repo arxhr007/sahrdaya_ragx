@@ -1,12 +1,12 @@
 """
-preprocess_data.py — Run this ONCE (or whenever sahrdaya_rag.txt changes) to produce
+preprocess_data.py — Run this ONCE (or whenever data/raw/sahrdaya_rag.txt changes) to produce
 data_cleaned.jsonl which rag_setup.py loads at startup.
 
 Usage:
     python preprocess_data.py
 
-Input:  sahrdaya_rag.txt  (raw scraped chunks:  chunk_N<TAB>content)
-Output: data_cleaned.jsonl (one JSON object per optimized chunk)
+Input:  data/raw/sahrdaya_rag.txt  (raw scraped chunks:  chunk_N<TAB>content)
+Output: data/processed/data_cleaned.jsonl (one JSON object per optimized chunk)
 """
 
 import json
@@ -252,8 +252,8 @@ def _split_text(text: str) -> list[str]:
 # 4.  MAIN PIPELINE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-INPUT_FILE  = "sahrdaya_rag.txt"
-OUTPUT_FILE = "data_cleaned.jsonl"
+INPUT_FILE  = "data/raw/sahrdaya_rag.txt"
+OUTPUT_FILE = "data/processed/data_cleaned.jsonl"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -482,6 +482,7 @@ def main():
           f"({rechunked_count} large chunks were split)")
 
     # ── Write output ────────────────────────────────────────────────────────
+    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         for doc in final_docs:
             f.write(json.dumps(doc, ensure_ascii=False) + "\n")

@@ -8,7 +8,7 @@ Usage:
 import sqlite3
 import sys
 
-DB_PATH = "college.db"
+DB_PATH = "data/sql/college.db"
 
 REQUIRED_TABLES = [
     "faculty",
