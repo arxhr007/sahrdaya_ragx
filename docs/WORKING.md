@@ -20,7 +20,8 @@ RAG:               Question ──▶ Search relevant docs ──▶ LLM (reads 
 
 ```mermaid
 flowchart LR
-    A[🌐 College Website] -->|scraper.py| B[📄 data/raw/sahrdaya_rag.txt]
+    A[🌐 College Website] -->|scraper.py| AP[📎 Popup PDF Link Capture]
+    AP --> B[📄 data/raw/sahrdaya_rag.txt]
   SCSV[🧾 data/students.csv] -->|student_db.py| I[🗃️ data/sql/college.db]
     B -->|preprocess_data.py| C[📦 data/processed/data_cleaned.jsonl]
     B -->|sql_db_setup.py| I[🗃️ data/sql/college.db]
@@ -45,7 +46,7 @@ flowchart LR
 
 | Stage | What happens | File |
 |---|---|---|
-| 1. Scrape | Crawl the college website, extract text | `scraper.py` |
+| 1. Scrape | Crawl the college website, extract text, capture popup PDF links | `scraper.py` |
 | 2. Preprocess | Clean, categorise, chunk, inject aliases, structure former people | `preprocess_data.py` |
 | 3. Structured DB | Build shared SQLite data: faculty + former people + students + interests | `sql_db_setup.py`, `student_db.py` |
 | 4. Index | Build BM25 + FAISS search indexes | `rag_setup.py` |
@@ -63,7 +64,9 @@ flowchart TD
     B -->|No| D[Crawl and discover links]
     C --> E[Multi-threaded Playwright scraping]
     D --> E
-    E --> F[Extract text from each page]
+  E --> P[Open modal actions: Stats / Download / Open External]
+  P --> Q[Capture document URLs from DOM + requests]
+  Q --> F[Inject discovered links and extract page text]
     F --> G[data/raw/sahrdaya_rag.txt - one chunk per line]
     F --> H[structured JSON]
     F --> I[URL tracking with hashes]
@@ -88,16 +91,20 @@ Concurrent crawling requires shared state. The scraper uses four thread-safe pri
 
 All use `threading.Lock` internally for mutual exclusion.
 
-### 1.2 Playwright Rendering
+### 1.2 Playwright Rendering and Popup Link Capture
 
 Many pages on `sahrdaya.ac.in` are Firestore-backed SPAs — the HTML served by the server is a skeleton, and the actual content is loaded by JavaScript. The scraper:
 
 1. Launches a headless Chromium browser via Playwright
 2. Waits for `load` event (falls back to `domcontentloaded` on timeout)
 3. **Scrolls to the bottom** of the page to trigger lazy loading
-4. Waits 2 seconds for content to settle before extracting text
+4. Clicks modal-driven actions (for example: Stats, Download, Open External) to reveal hidden document URLs
+5. Captures URLs from both DOM attributes and browser request events
+6. Injects discovered links into the extracted HTML before BeautifulSoup parsing
+7. Waits for content to settle and extracts text
 
 This ensures JavaScript-rendered faculty profiles, department pages, and announcements are fully captured.
+It also ensures modal-only placement/statistics PDF links are persisted as `Document Links` in scraped output.
 
 ### 1.3 Multiple Output Formats
 

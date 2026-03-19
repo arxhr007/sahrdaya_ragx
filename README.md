@@ -219,11 +219,12 @@ nltk.download("punkt_tab")
 # Full site crawl
 python scraper.py https://www.sahrdaya.ac.in/ -o sahrdaya --threads 8 --use-playwright
 
-# Single page append
-python scraper.py https://www.sahrdaya.ac.in/faculty -o sahrdaya --single --use-playwright
+# Single page append (example: placement page with modal PDF links)
+python scraper.py https://www.sahrdaya.ac.in/traning-and-placement -o sahrdaya --single --use-playwright
 ```
 
 This produces `data/raw/sahrdaya_rag.txt`, which is the default input for preprocessing and DB setup.
+For modal-driven pages (Stats -> Download/Open External), the scraper also captures discovered PDF URLs and stores them as Document Links in the raw output.
 
 ### Step 2 — Preprocess
 
@@ -413,7 +414,7 @@ If you connect this to GitHub Actions, use this same sequence as your deploy job
 
 ```
 ragx-backend/
-├── scraper.py              # Web scraper (multi-threaded, Playwright)
+├── scraper.py              # Web scraper (multi-threaded, Playwright, popup-aware PDF link capture)
 ├── data/
 │   ├── raw/
 │   │   ├── sahrdaya_rag.txt
