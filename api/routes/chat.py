@@ -38,6 +38,8 @@ load_control = LoadController(
     queue_wait_seconds=settings.queue_wait_seconds,
 )
 
+URL_PATTERN = re.compile(r"https?://[^\s)\]\}>\"']+")
+
 
 def _extract_text(content: Any) -> str:
     if isinstance(content, str):
@@ -83,6 +85,108 @@ def _clean_sql_result(result: str) -> str | None:
     if text.upper() == "NOT_SQL" or not text.upper().startswith("SELECT"):
         return None
     return text
+
+
+def _extract_urls(text: str, limit: int = 6) -> list[str]:
+    found = URL_PATTERN.findall(text or "")
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _is_static_asset(u: str) -> bool:
+        low = u.lower().split("?")[0]
+        return low.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".ico", ".css", ".js"))
+
+    def _priority(u: str) -> int:
+        low = u.lower()
+        if ".pdf" in low or "alt=media" in low:
+            return 0
+        if any(ext in low for ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]):
+            return 1
+        return 2
+
+    candidates: list[str] = []
+    for url in found:
+        u = url.rstrip(".,;:)")
+        if not u or u in seen or _is_static_asset(u):
+            continue
+        seen.add(u)
+        candidates.append(u)
+
+    for u in sorted(candidates, key=_priority):
+        out.append(u)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _query_likely_needs_links(query: str) -> bool:
+    q = (query or "").lower()
+    keywords = [
+        "link", "links", "url", "download", "pdf", "document", "docs",
+        "placement", "placements", "stats", "statistics", "report", "handbook",
+        "regulation", "syllabus", "approval", "audit",
+    ]
+    return any(k in q for k in keywords)
+
+
+def _format_fallback_links(query: str, urls: list[str]) -> str:
+    q = (query or "").lower()
+    unique: list[str] = []
+    seen: set[str] = set()
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            unique.append(u)
+
+    if "placement" not in q:
+        return "Direct links from context:\n" + "\n".join(f"- {u}" for u in unique)
+
+    year_links: list[tuple[str, str]] = []
+    extra_links: list[str] = []
+    for u in unique:
+        low = u.lower()
+        m = re.search(r"tpo%2fplacement%2fsah%2f(\d{4}-\d{2})", low)
+        if not m:
+            m = re.search(r"/tpo/placement/sah/(\d{4}-\d{2})", low)
+        if m:
+            year_links.append((m.group(1), u))
+        else:
+            extra_links.append(u)
+
+    def _year_start(label: str) -> int:
+        try:
+            return int(label.split("-")[0])
+        except Exception:
+            return 9999
+
+    year_links.sort(key=lambda x: _year_start(x[0]))
+
+    lines = ["Verified placement report links (year-wise):"]
+    for y, u in year_links:
+        lines.append(f"- {y}: {u}")
+    for u in extra_links:
+        lines.append(f"- {u}")
+    return "\n".join(lines)
+
+
+def _harmonize_response_with_links(response: str, links_appended: bool) -> str:
+    """Remove contradictory 'no direct URL' claims when links are present below."""
+    if not links_appended:
+        return response
+    text = response or ""
+    replacement_map = [
+        (r"\*?No\s+direct\s+(?:URL|URLs|link|links?)\s+(?:was|were|is|are)\s+(?:present|provided)\s+in\s+the\s+context\.?\*?", "-"),
+        (r"\*No URL provided in the context\*", "-"),
+        (r"\*no direct urls? (?:are|were) (?:present|provided) in the context\*", "-"),
+        (r"No direct URL \(if any\)\s*[:\-]?\s*No[^\n|.]*", "-"),
+        (r"-\s*\*\*Download links\*\*[^\n]*", ""),
+        (r"\*\*Download links\*\*[^\n]*", ""),
+        (r"the context mentions[^\n]*actual download links?[^\n]*\.", ""),
+    ]
+    for pat, repl in replacement_map:
+        text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 async def _invoke_with_key_failover(coro_factory):
@@ -206,6 +310,13 @@ async def _process_chat(req: ChatRequest, session_id: str) -> ChatResponse:
             context_str, chunk_ids, num_docs = rag_setup.retrieve_with_metadata(req.message)
             context_tokens = rate_manager.estimate_tokens(context_str)
             answer, key_used = await _answer_rag(req.message, history_text, context_str)
+            if _query_likely_needs_links(req.message) and not URL_PATTERN.search(answer or ""):
+                fallback_urls = _extract_urls(context_str, limit=6)
+                if not fallback_urls:
+                    fallback_urls = rag_setup.retrieve_supporting_urls(req.message, limit=6)
+                if fallback_urls:
+                    answer = answer.rstrip() + "\n\n" + _format_fallback_links(req.message, fallback_urls)
+                    answer = _harmonize_response_with_links(answer, links_appended=True)
             key_hint = KeyPool.key_hint(key_used)
 
         session_store.append_turn(session_id, "user", req.message)

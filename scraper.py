@@ -295,6 +295,223 @@ def is_document_link(url: str) -> bool:
     path = urlparse(url).path.lower()
     return path.endswith(DOCUMENT_EXTENSIONS)
 
+
+def _looks_like_document_url(url: str) -> bool:
+    """Heuristic for document-like URLs, including storage links without file extension in path."""
+    if not url:
+        return False
+    clean = url.strip()
+    if not clean:
+        return False
+
+    path = urlparse(clean).path.lower()
+
+    # Ignore static image/media assets commonly requested while opening modals.
+    if path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".ico")):
+        return False
+
+    if is_document_link(clean):
+        return True
+
+    lower = clean.lower()
+    if "firebasestorage.googleapis.com" in lower and (".pdf" in lower or "alt=media" in lower):
+        return True
+    if "/download" in lower and ("pdf" in lower or "report" in lower or "document" in lower):
+        return True
+    return False
+
+
+def _extract_urls_from_js_snippet(snippet: str) -> List[str]:
+    if not snippet:
+        return []
+    return re.findall(r"https?://[^\s\"'<>]+", snippet)
+
+
+def _collect_document_urls_from_page(page, base_url: str) -> Set[str]:
+    """Collect document-like URLs from anchors and common data attributes."""
+    found: Set[str] = set()
+
+    try:
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.getAttribute('href') || '')")
+        for href in hrefs or []:
+            full = urljoin(base_url, (href or "").strip())
+            if _looks_like_document_url(full):
+                found.add(full)
+    except Exception:
+        pass
+
+    try:
+        values = page.eval_on_selector_all(
+            "[data-url], [data-href], [onclick], [href]",
+            """
+            els => els.flatMap(e => [
+                e.getAttribute('data-url') || '',
+                e.getAttribute('data-href') || '',
+                e.getAttribute('href') || '',
+                e.getAttribute('onclick') || ''
+            ])
+            """,
+        )
+        for raw in values or []:
+            raw = (raw or "").strip()
+            if not raw:
+                continue
+            if raw.lower().startswith("javascript:"):
+                for u in _extract_urls_from_js_snippet(raw):
+                    if _looks_like_document_url(u):
+                        found.add(u)
+                continue
+
+            if raw.startswith("http://") or raw.startswith("https://") or raw.startswith("/"):
+                full = urljoin(base_url, raw)
+                if _looks_like_document_url(full):
+                    found.add(full)
+            else:
+                for u in _extract_urls_from_js_snippet(raw):
+                    if _looks_like_document_url(u):
+                        found.add(u)
+    except Exception:
+        pass
+
+    return found
+
+
+def _click_modal_triggers_and_capture(page, url: str) -> Set[str]:
+    """Open likely modals/popups and capture hidden document links from actions inside."""
+    captured: Set[str] = set()
+
+    def _remember(u: str):
+        clean = (u or "").split("#")[0].rstrip("/")
+        if _looks_like_document_url(clean):
+            captured.add(clean)
+
+    # Observe network requests triggered by popup actions (download/open external).
+    def _on_request(req):
+        _remember(req.url)
+
+    try:
+        page.on("request", _on_request)
+    except Exception:
+        pass
+
+    # Initial pass from visible DOM.
+    for u in _collect_document_urls_from_page(page, url):
+        _remember(u)
+
+    trigger_selectors = [
+        "button:has-text('Stats')",
+        "a:has-text('Stats')",
+        "button:has-text('View Statistics')",
+        "a:has-text('View Statistics')",
+        "button:has-text('View')",
+        "a:has-text('View')",
+    ]
+    action_selectors = [
+        "button:has-text('Download')",
+        "a:has-text('Download')",
+        "button:has-text('Open External')",
+        "a:has-text('Open External')",
+        "button:has-text('Open')",
+        "a:has-text('Open')",
+        "a:has-text('PDF')",
+        "button:has-text('PDF')",
+    ]
+    close_selectors = [
+        "button[aria-label='Close']",
+        "button[aria-label='close']",
+        "button:has-text('Close')",
+        "button:has-text('×')",
+        "button:has-text('X')",
+    ]
+
+    max_trigger_clicks = 40
+    clicked = 0
+
+    try:
+        for sel in trigger_selectors:
+            loc = page.locator(sel)
+            count = min(loc.count(), 15)
+            for i in range(count):
+                if clicked >= max_trigger_clicks:
+                    break
+                try:
+                    el = loc.nth(i)
+                    if not el.is_visible():
+                        continue
+                    el.click(timeout=2500)
+                    clicked += 1
+                    time.sleep(0.35)
+
+                    # Collect links after modal opens.
+                    for u in _collect_document_urls_from_page(page, url):
+                        _remember(u)
+
+                    # Click modal actions that reveal direct URLs.
+                    for action_sel in action_selectors:
+                        action_loc = page.locator(action_sel)
+                        action_count = min(action_loc.count(), 8)
+                        for j in range(action_count):
+                            try:
+                                act = action_loc.nth(j)
+                                if not act.is_visible():
+                                    continue
+                                href = act.get_attribute("href") or ""
+                                if href:
+                                    _remember(urljoin(url, href))
+                                act.click(timeout=2000)
+                                time.sleep(0.2)
+                            except Exception:
+                                continue
+
+                    # Collect again after actions.
+                    for u in _collect_document_urls_from_page(page, url):
+                        _remember(u)
+
+                    # Try to close the modal before moving to next row.
+                    closed = False
+                    for close_sel in close_selectors:
+                        close_loc = page.locator(close_sel)
+                        if close_loc.count() > 0:
+                            try:
+                                close_loc.first.click(timeout=1000)
+                                closed = True
+                                time.sleep(0.2)
+                                break
+                            except Exception:
+                                continue
+                    if not closed:
+                        try:
+                            page.keyboard.press("Escape")
+                            time.sleep(0.15)
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+            if clicked >= max_trigger_clicks:
+                break
+    except Exception:
+        pass
+
+    return captured
+
+
+def _inject_synthetic_doc_links(html: str, urls: Set[str]) -> str:
+    """Append discovered links to HTML so downstream soup extraction sees them."""
+    if not urls:
+        return html
+    anchors = "\n".join(
+        f'<li><a href="{u}">Document Link {i+1}</a></li>'
+        for i, u in enumerate(sorted(urls))
+    )
+    injected = (
+        "<div id=\"scraper-discovered-doc-links\">"
+        "<h2>Document Links</h2><ul>"
+        f"{anchors}</ul></div>"
+    )
+    if "</body>" in html:
+        return html.replace("</body>", injected + "</body>")
+    return html + injected
+
 def fetch_with_playwright(url: str, timeout: int = 60) -> str:
     if not _HAS_PLAYWRIGHT:
         raise RuntimeError("Playwright not installed. Install with `pip install playwright` and run `playwright install`.")
@@ -332,7 +549,12 @@ def fetch_with_playwright(url: str, timeout: int = 60) -> str:
         
         # Additional wait for any remaining async operations
         time.sleep(2)
+
+        # Capture hidden links shown only via popups/modals (e.g., Stats -> Download/Open External).
+        discovered_doc_urls = _click_modal_triggers_and_capture(page, url)
+
         html = page.content()
+        html = _inject_synthetic_doc_links(html, discovered_doc_urls)
         browser.close()
         return html
 

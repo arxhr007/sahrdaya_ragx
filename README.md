@@ -68,7 +68,9 @@ flowchart TD
     subgraph INGESTION["🕷️ Data Ingestion Layer"]
         A["🌐 sahrdaya.ac.in"] -->|"sitemap<br/>discovery"| B["🗺️ URL Queue"]
         B -->|"4 threads"| C["🎭 Playwright<br/>Renderer"]
-        C -->|"JS execution<br/>+ DOM parse"| D["🧹 BS4<br/>Cleaner"]
+        C -->|"open modals<br/>click Stats/Download"| C2["📎 Popup Link<br/>Capture"]
+        C2 -->|"inject discovered<br/>PDF URLs"| D["🧹 BS4<br/>Cleaner"]
+        C -->|"JS execution<br/>+ DOM parse"| D
         D --> E["📄 data/raw/sahrdaya_rag.txt<br/>~2K chunks"]
     end
 
@@ -147,7 +149,7 @@ flowchart TD
 
 | File | Role |
 |---|---|
-| `scraper.py` | Multi-threaded web scraper (Playwright + Sitemap, thread-safe, 4 output formats) |
+| `scraper.py` | Multi-threaded web scraper (Playwright + Sitemap, popup-aware PDF link capture, thread-safe, 4 output formats) |
 | `data/raw/sahrdaya_rag.txt` | Raw scraped chunks (TSV: `chunk_id\tcontent`) |
 | `preprocess_data.py` | Cleans, categorises (18 categories), sentence-splits, injects search aliases, and structures former people data |
 | `data/processed/data_cleaned.jsonl` | Optimised chunks ready for indexing |

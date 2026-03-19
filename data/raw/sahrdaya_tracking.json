@@ -4,11 +4,12 @@
     "start_url": "https://www.sahrdaya.ac.in/",
     "domain": "www.sahrdaya.ac.in",
     "total_pages": 563,
-    "total_chunks": 1450,
+    "total_chunks": 1452,
     "max_pages_limit": 1000,
     "chunk_size": 1800,
     "threads_used": 8,
-    "sitemap_mode": true
+    "sitemap_mode": true,
+    "last_single_scrape": "2026-03-19T10:36:00.340030"
   },
   "urls": {
     "https://www.sahrdaya.ac.in/about/annual-report": {
@@ -4397,19 +4398,61 @@
       "url": "https://www.sahrdaya.ac.in/traning-and-placement",
       "title": "Sahrdaya College of Engineering & Technology | Top 15 Engineering College in Kerala | Autonomous Institution",
       "description": "Now Ranked #15! One of the Best Engineering Colleges in Kerala. NAAC B+ Accredited | NBA Accredited Programs | 1800+ Students | 90%+ Placement Rate | Affiliated to APJ Abdul Kalam Technological University | Best Engineering College in Thrissur, Kerala",
-      "document_links": [],
-      "content_hash": "8cfec1befbe13228a7873da20413330739f3c66ea7a172ea02c4fe566c7146f0",
+      "document_links": [
+        {
+          "url": "https://firebasestorage.googleapis.com/v0/b/college-website-27cf1.firebasestorage.app/o/tpo%2Fplacement%2Fsah%2F2015-19%2F1771309400121-2015-19.pdf?alt=media&token=12501ab8-43d0-4de2-a68f-551b310023ae",
+          "label": "Document Link 1",
+          "purpose": "Document Links - Document Link 1"
+        },
+        {
+          "url": "https://firebasestorage.googleapis.com/v0/b/college-website-27cf1.firebasestorage.app/o/tpo%2Fplacement%2Fsah%2F2016-20%2F1771309465375-2016-20.pdf?alt=media&token=b30f0291-5595-48ab-a68b-f73e7b2f51c5",
+          "label": "Document Link 2",
+          "purpose": "Document Links - Document Link 2"
+        },
+        {
+          "url": "https://firebasestorage.googleapis.com/v0/b/college-website-27cf1.firebasestorage.app/o/tpo%2Fplacement%2Fsah%2F2017-21%2F1771474820106-2021-placements.pdf?alt=media&token=eeb637d1-8364-4247-8973-726f863c0fd9",
+          "label": "Document Link 3",
+          "purpose": "Document Links - Document Link 3"
+        },
+        {
+          "url": "https://firebasestorage.googleapis.com/v0/b/college-website-27cf1.firebasestorage.app/o/tpo%2Fplacement%2Fsah%2F2018-22%2F1771473719683-2022merged.pdf?alt=media&token=679e4bf6-74bd-4da3-8d77-e6bfe07d0454",
+          "label": "Document Link 4",
+          "purpose": "Document Links - Document Link 4"
+        },
+        {
+          "url": "https://firebasestorage.googleapis.com/v0/b/college-website-27cf1.firebasestorage.app/o/tpo%2Fplacement%2Fsah%2F2019-23%2F1771473962517-merged2023.pdf?alt=media&token=c3b366e1-c7ed-4e94-bed4-f0deea3f35c2",
+          "label": "Document Link 5",
+          "purpose": "Document Links - Document Link 5"
+        },
+        {
+          "url": "https://firebasestorage.googleapis.com/v0/b/college-website-27cf1.firebasestorage.app/o/tpo%2Fplacement%2Fsah%2F2020-24%2F1771473575551-merged2024.pdf?alt=media&token=64385ff5-2585-424d-ab6a-ef188691f305",
+          "label": "Document Link 6",
+          "purpose": "Document Links - Document Link 6"
+        },
+        {
+          "url": "https://sahrdaya.ac.in/logo.webp",
+          "label": "Document Link 7",
+          "purpose": "Document Links - Document Link 7"
+        },
+        {
+          "url": "https://www.sahrdaya.ac.in/logo.webp",
+          "label": "Document Link 8",
+          "purpose": "Document Links - Document Link 8"
+        }
+      ],
+      "content_hash": "66818df9c75fa7b261b79d77f1d474e5cbf43bb25eae1be2440a0f27499ebe8f",
       "chunk_ids": [
-        "chunk_324"
+        "chunk_1450",
+        "chunk_1451"
       ],
       "chunk_range": {
-        "start": 324,
-        "end": 324,
-        "count": 1
+        "start": 1450,
+        "end": 1451,
+        "count": 2
       },
-      "word_count": 50,
-      "char_count": 371,
-      "scraped_at": "2026-03-19T00:04:50.922609"
+      "word_count": 116,
+      "char_count": 1969,
+      "scraped_at": "2026-03-19T10:36:00.339980"
     },
     "https://www.sahrdaya.ac.in/department/cse/about/vision-mission": {
       "url": "https://www.sahrdaya.ac.in/department/cse/about/vision-mission",
@@ -17884,6 +17927,14 @@
     "chunk_1449": {
       "char_count": 61,
       "preview": "Page Not Found\nCould not find the requested page.\nReturn Home"
+    },
+    "chunk_1450": {
+      "char_count": 371,
+      "preview": "Placement Statistics\nOverall college placement statistics and reports\nYear-wise Placement Reports\n20..."
+    },
+    "chunk_1451": {
+      "char_count": 1596,
+      "preview": "Document Links:\n- Document Links - Document Link 1: https://firebasestorage.googleapis.com/v0/b/coll..."
     }
   }
 }

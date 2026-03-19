@@ -21,6 +21,9 @@ from sentence_transformers import CrossEncoder
 
 from sql_extractors.student_db import ensure_student_data
 
+
+URL_PATTERN = re.compile(r"https?://[^\s)\]\}>\"']+")
+
 # ============ QUERY EXPANSION ============
 
 _QUERY_EXPANSIONS = {
@@ -288,7 +291,9 @@ INSTRUCTIONS:
 - Resolve pronouns using conversation history.
 - If the answer is not in context, suggest contacting: admission@sahrdaya.ac.in / 0480 2759275.
 - Redirect non-college queries to Sahrdaya topics.
-- If asked for a document, PDF, regulation, form, handbook, or download, return the direct URL(s) from context first.
+- If asked for a document, PDF, regulation, form, handbook, download, placements report, or statistics file, return direct URL(s) from context first.
+- Always print raw URLs in plain text (starting with http:// or https://). Do not hide links behind markdown labels.
+- Never invent URLs. If none are present in context, explicitly say no direct link was found in context.
 - Be concise but complete.""")
 
 # ============ FACULTY SQL DATABASE ============
@@ -887,6 +892,132 @@ def retrieve_with_metadata(question):
 
     context_str = format_docs(reranked)
     return context_str, chunk_ids, len(reranked)
+
+
+def _extract_urls_from_docs(doc_list, limit=8):
+    """Extract unique URLs from document content and metadata values."""
+    out = []
+    seen = set()
+
+    def _is_static_asset(u):
+        low = u.lower().split("?")[0]
+        return low.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".ico", ".css", ".js"))
+
+    def _priority(u):
+        low = u.lower()
+        if ".pdf" in low or "alt=media" in low:
+            return 0
+        if any(ext in low for ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]):
+            return 1
+        return 2
+
+    candidates = []
+
+    def _add_url(url):
+        u = (url or "").rstrip(".,;:)")
+        if u and u not in seen and not _is_static_asset(u):
+            seen.add(u)
+            candidates.append(u)
+
+    for doc in doc_list:
+        for match in URL_PATTERN.findall(doc.page_content or ""):
+            _add_url(match)
+
+        md = doc.metadata or {}
+        for _, value in md.items():
+            if isinstance(value, str):
+                for match in URL_PATTERN.findall(value):
+                    _add_url(match)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str):
+                        for match in URL_PATTERN.findall(item):
+                            _add_url(match)
+
+    for u in sorted(candidates, key=_priority):
+        out.append(u)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def retrieve_supporting_urls(question, limit=6):
+    """Retrieve likely relevant docs for link-heavy queries and return direct URLs."""
+
+    q = (question or "").lower()
+    tokens = set(re.findall(r"[a-z0-9]{3,}", q))
+    stop = {
+        "the", "and", "for", "with", "from", "that", "this", "what", "when", "where",
+        "which", "show", "list", "give", "need", "want", "have", "has", "all", "about",
+        "your", "their", "there", "into", "stats", "stat", "data", "details", "please",
+    }
+    query_terms = sorted(t for t in tokens if t not in stop)
+
+    required = []
+    if "placement" in q:
+        required.extend(["placement", "placements"])
+    if "stat" in q or "report" in q or "pdf" in q:
+        required.extend(["statistics", "stats", "report", "pdf", "view statistics"])
+
+    url_docs = []
+    for d in docs:
+        txt = d.page_content or ""
+        has_url = bool(URL_PATTERN.search(txt))
+        if not has_url:
+            md = d.metadata or {}
+            for _, value in md.items():
+                if isinstance(value, str) and URL_PATTERN.search(value):
+                    has_url = True
+                    break
+                if isinstance(value, list) and any(isinstance(v, str) and URL_PATTERN.search(v) for v in value):
+                    has_url = True
+                    break
+        if has_url:
+            url_docs.append(d)
+
+    scored = []
+    for d in url_docs:
+        text = (d.page_content or "").lower()
+        cats = str((d.metadata or {}).get("categories", "")).lower()
+        has_placement_category = "placement" in cats
+
+        if "placement" in q:
+            placement_markers = [
+                "placement statistics",
+                "placement stats",
+                "year-wise placement reports",
+                "view statistics pdf",
+                "academic year reports",
+            ]
+            if not any(marker in text for marker in placement_markers) and not has_placement_category:
+                continue
+
+        term_hits = sum(1 for t in query_terms if t in text)
+        required_hits = sum(1 for t in required if t in text)
+        score = term_hits + (required_hits * 3)
+        if "placement" in q and has_placement_category:
+            score += 4
+        if score > 0:
+            scored.append((score, d))
+
+    if scored:
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_docs = [d for _, d in scored[:50]]
+        urls = _extract_urls_from_docs(top_docs, limit=limit)
+        if urls:
+            return urls
+
+    # For placement/stat queries, avoid returning unrelated URLs from broad fallback.
+    if "placement" in q:
+        return []
+
+    # Fallback to retrieval-based URL search if lexical scoring found nothing.
+    expanded = expand_query(f"{question} pdf link url download")
+    candidates = retriever_large.invoke(expanded)
+    if not candidates:
+        return []
+    reranked = rerank_docs(f"{question} direct pdf link url", candidates[:80], top_k=35)
+    return _extract_urls_from_docs(reranked, limit=limit)
 
 # Chain
 qa_chain = (

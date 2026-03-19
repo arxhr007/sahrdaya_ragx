@@ -2,13 +2,15 @@ from rag_setup import (
     qa_chain_with_context, chat_history,
     retrieve_with_metadata, expand_query,
     classify_and_generate_sql, execute_faculty_sql, format_sql_results,
-    validate_faculty_sql,
+    validate_faculty_sql, retrieve_supporting_urls,
 )
 import re
 import time
 import sys
 import math
 import os
+
+URL_PATTERN = re.compile(r"https?://[^\s)\]\}>\"']+")
 
 ascii=r"""
 ███████╗ █████╗ ██╗  ██╗██████╗ ██████╗  █████╗ ██╗   ██╗ █████╗     ██████╗  █████╗  ██████╗    ██╗  ██╗
@@ -40,6 +42,109 @@ def build_history_text():
         if i + 1 < len(chat_history):
             h += f"User: {chat_history[i]}\nAssistant: {chat_history[i+1]}\n\n"
     return h
+
+
+def _extract_urls(text, limit=8):
+    """Extract unique URLs in appearance order."""
+    found = URL_PATTERN.findall(text or "")
+    cleaned = []
+    seen = set()
+
+    def _is_static_asset(u):
+        low = u.lower().split("?")[0]
+        return low.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".ico", ".css", ".js"))
+
+    def _priority(u):
+        low = u.lower()
+        if ".pdf" in low or "alt=media" in low:
+            return 0
+        if any(ext in low for ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]):
+            return 1
+        return 2
+
+    candidates = []
+    for url in found:
+        u = url.rstrip(".,;:)")
+        if not u or u in seen or _is_static_asset(u):
+            continue
+        seen.add(u)
+        candidates.append(u)
+
+    for u in sorted(candidates, key=_priority):
+        cleaned.append(u)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def _query_likely_needs_links(query):
+    q = (query or "").lower()
+    keywords = [
+        "link", "links", "url", "download", "pdf", "document", "docs",
+        "placement", "placements", "stats", "statistics", "report", "handbook",
+        "regulation", "syllabus", "approval", "audit",
+    ]
+    return any(k in q for k in keywords)
+
+
+def _format_fallback_links(query, urls):
+    q = (query or "").lower()
+    unique = []
+    seen = set()
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            unique.append(u)
+
+    if "placement" not in q:
+        return "Direct links from context:\n" + "\n".join(f"- {u}" for u in unique)
+
+    year_links = []
+    extra_links = []
+    for u in unique:
+        low = u.lower()
+        m = re.search(r"tpo%2fplacement%2fsah%2f(\d{4}-\d{2})", low)
+        if not m:
+            m = re.search(r"/tpo/placement/sah/(\d{4}-\d{2})", low)
+        if m:
+            year_links.append((m.group(1), u))
+        else:
+            extra_links.append(u)
+
+    def _year_start(label):
+        try:
+            return int(label.split("-")[0])
+        except Exception:
+            return 9999
+
+    year_links.sort(key=lambda x: _year_start(x[0]))
+
+    lines = ["Verified placement report links (year-wise):"]
+    for y, u in year_links:
+        lines.append(f"- {y}: {u}")
+    for u in extra_links:
+        lines.append(f"- {u}")
+    return "\n".join(lines)
+
+
+def _harmonize_response_with_links(response, links_appended):
+    """Remove contradictory 'no direct URL' claims when links are present below."""
+    if not links_appended:
+        return response
+    text = response or ""
+    replacement_map = [
+        (r"\*?No\s+direct\s+(?:URL|URLs|link|links?)\s+(?:was|were|is|are)\s+(?:present|provided)\s+in\s+the\s+context\.?\*?", "-"),
+        (r"\*No URL provided in the context\*", "-"),
+        (r"\*no direct urls? (?:are|were) (?:present|provided) in the context\*", "-"),
+        (r"No direct URL \(if any\)\s*[:\-]?\s*No[^\n|.]*", "-"),
+        (r"-\s*\*\*Download links\*\*[^\n]*", ""),
+        (r"\*\*Download links\*\*[^\n]*", ""),
+        (r"the context mentions[^\n]*actual download links?[^\n]*\.", ""),
+    ]
+    for pat, repl in replacement_map:
+        text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 # ─── Stats box ──────────────────────────────────────────────────────────────────
 
@@ -335,6 +440,16 @@ while True:
         "chat_history": history_text,
         "context": context_str,
     })
+
+    # Terminal users need visible plain URLs; append from context if model omitted them.
+    if _query_likely_needs_links(user_input) and not URL_PATTERN.search(response or ""):
+        fallback_urls = _extract_urls(context_str, limit=6)
+        if not fallback_urls:
+            fallback_urls = retrieve_supporting_urls(user_input, limit=6)
+        if fallback_urls:
+            response = response.rstrip() + "\n\n" + _format_fallback_links(user_input, fallback_urls)
+            response = _harmonize_response_with_links(response, links_appended=True)
+
     t_end = time.time()
 
     # Use total time (includes SQL classification attempt if it returned NOT_SQL)
