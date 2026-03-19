@@ -1,6 +1,9 @@
 # Index cache (generated on first run)
 .index_cache/
 
+#test scripts
+scripts
+
 # Python
 __pycache__/
 *.pyc

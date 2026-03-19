@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env
+    environment:
+      GROQ_API_KEYS: ${GROQ_API_KEY_1}
     restart: unless-stopped
     volumes:
       - ./.index_cache:/app/.index_cache
@@ -22,6 +24,8 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env
+    environment:
+      GROQ_API_KEYS: ${GROQ_API_KEY_2}
     restart: unless-stopped
     volumes:
       - ./.index_cache:/app/.index_cache
@@ -39,6 +43,8 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env
+    environment:
+      GROQ_API_KEYS: ${GROQ_API_KEY_3}
     restart: unless-stopped
     volumes:
       - ./.index_cache:/app/.index_cache
