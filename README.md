@@ -7,6 +7,8 @@ A Retrieval-Augmented Generation (RAG) chatbot backend for **Sahrdaya College of
 > **🚀 What's planned next?** See [FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md) for the roadmap: streaming responses, Docker, web frontend, and more.
 >
 > **🧩 Connecting a frontend?** See [FRONTEND_INTEGRATION.md](docs/FRONTEND_INTEGRATION.md) for API payloads, session flow, streaming examples, and frontend integration patterns.
+>
+> **🤝 Contribution status:** See [CONTRIBUTING.md](docs/CONTRIBUTING.md). For now, we are not accepting PRs; please open Issues.
 
 ## Quick Run
 
@@ -461,7 +463,7 @@ ragx-backend/
 │   ├── nginx.conf          # Bare-metal/local nginx config
 │   └── nginx-docker.conf   # Docker nginx config
 ├── docs/
-│   ├── CONTRIBUTING.md     # Contribution rules and legal notes
+│   ├── docs/CONTRIBUTING.md # Contribution status and policy
 │   ├── FRONTEND_INTEGRATION.md # Frontend integration guide
 │   ├── WORKING.md          # Technical documentation — how the RAG works
 │   └── FUTURE_ADDITIONS.md # Roadmap and planned improvements

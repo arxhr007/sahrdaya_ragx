@@ -7,12 +7,11 @@ import { Button } from "@/components/ui/button"
 import { Send } from "lucide-react"
 
 const QUESTIONS = [
-  "What are the hostel facilities available?",
-  "How do I apply for scholarships?",
-  "What is the campus placement record?",
-  "Where is the library located?",
-  "What sports facilities are available?",
-  "How can I contact the admissions office?",
+  "List all faculty from CSE",
+  "Show students interested in chess",
+  "Who is the HOD of CSE?",
+  "How many faculty are in BME department?",
+  "Who are the former principals?",
 ]
 
 export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: () => void }) {
@@ -104,10 +103,10 @@ export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: (
   }, [])
 
   return (
-    <div className="flex flex-col items-center gap-16">
+    <div className="flex w-full flex-col items-center gap-8 md:gap-16">
       <div
         ref={containerRef}
-        className="flex items-center justify-center text-5xl md:text-8xl tracking-tighter md:tracking-tight text-primary font-nerd"
+        className="flex items-center justify-center text-4xl sm:text-6xl md:text-8xl tracking-tighter md:tracking-tight text-primary font-nerd"
       >
         <span ref={sahrdayaRef} className="overflow-hidden whitespace-nowrap inline-block" style={{ width: 0 }}>
           Sahrdaya
@@ -117,7 +116,7 @@ export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: (
         </span>
       </div>
 
-      <div ref={askBarRef} className="w-full max-w-3xl">
+      <div ref={askBarRef} className="w-full max-w-3xl px-1">
         <div className="relative">
           <input
             type="text"
@@ -125,29 +124,42 @@ export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: (
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
-            className="w-full pl-6 pr-14 py-6 text-lg bg-white/50 backdrop-blur-sm border-2 border-primary rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all placeholder:text-muted-foreground/60"
+            className="w-full pl-4 pr-12 py-4 md:py-6 text-base md:text-lg bg-white/50 backdrop-blur-sm border-2 border-primary rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all placeholder:text-muted-foreground/60"
           />
           <button 
             onClick={handleSubmit}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
+            className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-2.5 md:p-3 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
           >
             <Send size={20} />
           </button>
         </div>
       </div>
 
-      <div ref={buttonsRef} className="flex gap-6">
+      <div ref={buttonsRef} className="flex w-full max-w-4xl flex-wrap justify-center gap-3 md:gap-6">
         <Button
           variant="outline"
-          className="border-primary text-primary hover:bg-black hover:text-white hover:border-black transition-all duration-300 text-sm py-3 px-8 h-auto uppercase bg-transparent font-semibold"
+          onClick={() => router.push("/about")}
+          className="w-full sm:w-auto border-primary text-primary hover:bg-black hover:text-white hover:border-black transition-all duration-300 text-xs sm:text-sm py-3 px-5 sm:px-8 h-auto uppercase bg-transparent font-semibold"
         >
-          Get Started
+          About This Project
         </Button>
         <Button
           variant="outline"
-          className="border-primary text-primary hover:bg-black hover:text-white hover:border-black transition-all duration-300 text-sm py-3 px-8 h-auto uppercase bg-transparent font-semibold"
+          onClick={() => {
+            window.open("https://forms.gle/Ts644nDzj1F9nMmN9", "_blank", "noopener,noreferrer")
+          }}
+          className="w-full sm:w-auto border-primary text-primary hover:bg-black hover:text-white hover:border-black transition-all duration-300 text-xs sm:text-sm py-3 px-5 sm:px-8 h-auto uppercase bg-transparent font-semibold"
         >
-          Sign In
+          Student Form
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => {
+            window.open("https://github.com/arxhr007/sahrdaya_ragx", "_blank", "noopener,noreferrer")
+          }}
+          className="w-full sm:w-auto border-primary text-primary hover:bg-black hover:text-white hover:border-black transition-all duration-300 text-xs sm:text-sm py-3 px-5 sm:px-8 h-auto uppercase bg-transparent font-semibold"
+        >
+          Project Repo
         </Button>
       </div>
     </div>
