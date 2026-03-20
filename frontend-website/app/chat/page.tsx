@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { AnimatedGrid } from "@/components/animated-grid"
 import { ChatInterface } from "@/components/chat-interface"
@@ -14,7 +14,7 @@ import {
   Sparkles,
 } from "lucide-react"
 
-export default function ChatPage() {
+function ChatPageContent() {
   const searchParams = useSearchParams()
   const initialMessage = searchParams.get("q") || undefined
   const [checkingConsent, setCheckingConsent] = useState(true)
@@ -134,5 +134,13 @@ export default function ChatPage() {
         <FooterTime />
       </div>
     </main>
+  )
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense fallback={<main className="relative h-[100dvh] overflow-hidden" />}>
+      <ChatPageContent />
+    </Suspense>
   )
 }
