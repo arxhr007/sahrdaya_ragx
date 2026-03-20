@@ -25,6 +25,33 @@ from sql_extractors.student_db import ensure_student_data
 
 URL_PATTERN = re.compile(r"https?://[^\s)\]\}>\"']+")
 
+CREATOR_CANONICAL_LINE = (
+    "This AI assistant was created by Aaron Thomas, Shayen Thomas, "
+    "Mishal Shanavas, and Mathew Geejo."
+)
+
+CREATOR_QUERY_PATTERN = re.compile(
+    r"\b(who\s+created\s+you|creator|created\s+by|built\s+by|developers?|dev\s*team|website\s*team|credits?)\b",
+    re.IGNORECASE,
+)
+
+CREATOR_BOOST_TERMS = [
+    "created by",
+    "creator",
+    "developers",
+    "developer",
+    "website team",
+    "development team",
+    "backend & automation developer",
+    "infrastructure",
+    "devops",
+    "frontend",
+    "aaron thomas",
+    "shayen thomas",
+    "mishal shanavas",
+    "mathew geejo",
+]
+
 # ============ QUERY EXPANSION ============
 
 _query_correct_chain = None
@@ -123,6 +150,19 @@ else:
     docs = text_splitter.split_documents(documents)
     print(f"[*] Created {len(docs)} chunks (unoptimized — run preprocess_data.py for better results)")
 
+# Add a canonical attribution chunk so creator/credits questions always have a stable source.
+docs.append(
+    Document(
+        page_content=CREATOR_CANONICAL_LINE,
+        metadata={
+            "chunk_id": "canonical_creators",
+            "sub_chunk": "canonical_creators",
+            "categories": "about,developers,team,credits",
+            "source": "system_canonical",
+        },
+    )
+)
+
 # ============ RETRIEVERS ============
 
 # Embeddings (local, no API key needed)
@@ -143,6 +183,9 @@ def _data_hash() -> str:
     with open(CLEANED_FILE, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
+    # Also hash retrieval seeds so cache refreshes when canonical/system chunks change.
+    h.update(CREATOR_CANONICAL_LINE.encode("utf-8"))
+    h.update(b"creator_retrieval_v1")
     return h.hexdigest()
 
 def _cache_is_valid() -> bool:
@@ -316,6 +359,50 @@ def is_list_query(question):
                        "faculties from", "faculty from", "faculty of", "faculties of",
                        "how many faculty", "how many professors", "tell me all"]
     return any(ind in q_lower for ind in list_indicators)
+
+
+def is_creator_query(question: str) -> bool:
+    """Return True for creator/credits/developer identity questions."""
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    return bool(CREATOR_QUERY_PATTERN.search(q))
+
+
+def expand_creator_query(question: str) -> str:
+    """Append creator-specific retrieval terms for identity/credits questions."""
+    if not is_creator_query(question):
+        return question
+    return (
+        f"{question} created by developers development team website team credits "
+        "Aaron Thomas Shayen Thomas Mishal Shanavas Mathew Geejo"
+    )
+
+
+def rerank_docs_with_creator_boost(query: str, docs: list, top_k: int, creator_intent: bool) -> list:
+    """Rerank with cross-encoder and apply a light lexical boost for creator intents."""
+    if not docs:
+        return docs
+
+    pairs = [[query, doc.page_content] for doc in docs]
+    scores = _reranker.predict(pairs)
+
+    scored = []
+    for score, doc in zip(scores, docs):
+        boosted = float(score)
+        if creator_intent:
+            content = (doc.page_content or "").lower()
+            cats = str((doc.metadata or {}).get("categories", "")).lower()
+            hit_count = sum(1 for term in CREATOR_BOOST_TERMS if term in content)
+            if any(term in cats for term in ["developer", "team", "about", "credits"]):
+                hit_count += 2
+            if str((doc.metadata or {}).get("sub_chunk", "")).lower() == "canonical_creators":
+                hit_count += 4
+            boosted += 0.12 * hit_count
+        scored.append((boosted, doc))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [doc for _, doc in scored[:top_k]]
 
 # Prompt template
 prompt = ChatPromptTemplate.from_template("""You are the official AI assistant for Sahrdaya College of Engineering & Technology (SCET), Kodakara, Thrissur, Kerala.
@@ -905,32 +992,34 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
 def retrieve_context(inputs):
     """Hybrid BM25 + Vector retrieval with cross-encoder reranking."""
     question = normalize_user_query(inputs["question"])
-    expanded = expand_query(question)
+    expanded = expand_creator_query(expand_query(question))
 
     is_list = is_list_query(question)
-    active = retriever_large if is_list else retriever
+    creator_intent = is_creator_query(question)
+    active = retriever_large if (is_list or creator_intent) else retriever
     # Over-retrieve candidates for the reranker to score
-    candidate_k = 60 if is_list else 25
-    final_k = 35 if is_list else 10
+    candidate_k = 80 if creator_intent else (60 if is_list else 25)
+    final_k = 20 if creator_intent else (35 if is_list else 10)
 
     docs = active.invoke(expanded)
     candidates = docs[:candidate_k]
-    reranked = rerank_docs(question, candidates, top_k=final_k)
+    reranked = rerank_docs_with_creator_boost(question, candidates, top_k=final_k, creator_intent=creator_intent)
     return format_docs(reranked)
 
 
 def retrieve_with_metadata(question):
     """Retrieve docs with reranking and return (formatted_context, list_of_chunk_ids, num_docs)."""
     question = normalize_user_query(question)
-    expanded = expand_query(question)
+    expanded = expand_creator_query(expand_query(question))
     is_list = is_list_query(question)
-    active = retriever_large if is_list else retriever
-    candidate_k = 60 if is_list else 25
-    final_k = 35 if is_list else 10
+    creator_intent = is_creator_query(question)
+    active = retriever_large if (is_list or creator_intent) else retriever
+    candidate_k = 80 if creator_intent else (60 if is_list else 25)
+    final_k = 20 if creator_intent else (35 if is_list else 10)
 
     docs = active.invoke(expanded)
     candidates = docs[:candidate_k]
-    reranked = rerank_docs(question, candidates, top_k=final_k)
+    reranked = rerank_docs_with_creator_boost(question, candidates, top_k=final_k, creator_intent=creator_intent)
 
     chunk_ids = []
     for doc in reranked:
