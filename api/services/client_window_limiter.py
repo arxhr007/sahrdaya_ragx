@@ -57,3 +57,52 @@ class ClientWindowLimiter:
                 self._hits[key].append(now)
 
             return True, 0, None
+
+    def _status_for_queue(self, q: deque[float], now: float) -> dict:
+        used = len(q)
+        remaining = max(0, self.max_requests - used)
+        retry_after = 0
+        reset_after = 0
+
+        if q:
+            reset_after = int(max(1, self.window_seconds - (now - q[0])))
+        if used >= self.max_requests:
+            retry_after = int(max(1, self.window_seconds - (now - q[0])))
+
+        return {
+            "max_requests": self.max_requests,
+            "window_seconds": self.window_seconds,
+            "used": used,
+            "remaining": remaining,
+            "retry_after_seconds": retry_after,
+            "reset_after_seconds": reset_after,
+            "blocked": used >= self.max_requests,
+        }
+
+    def check(self, key: str) -> dict:
+        now = self._now()
+        with self._lock:
+            q = self._prune(now, key)
+            return self._status_for_queue(q, now)
+
+    def check_multi(self, keys: list[str]) -> tuple[bool, int, str | None, dict[str, dict]]:
+        now = self._now()
+        unique_keys = [k for k in dict.fromkeys(keys) if k]
+        if not unique_keys:
+            unique_keys = ["ip:unknown"]
+
+        with self._lock:
+            statuses: dict[str, dict] = {}
+            blocked_key = None
+            retry_after = 0
+
+            for key in unique_keys:
+                q = self._prune(now, key)
+                st = self._status_for_queue(q, now)
+                statuses[key] = st
+                if st["blocked"] and blocked_key is None:
+                    blocked_key = key
+                    retry_after = st["retry_after_seconds"]
+
+            allowed = blocked_key is None
+            return allowed, retry_after, blocked_key, statuses

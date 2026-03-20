@@ -10,7 +10,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_groq import ChatGroq
 
 import rag_setup
-from api.core.models import ChatRequest, ChatResponse, LimitsResponse, LoadResponse, SessionCreateResponse
+from api.core.models import (
+    ChatRequest,
+    ChatResponse,
+    LimitsResponse,
+    LoadResponse,
+    QuotaStatusResponse,
+    SessionCreateResponse,
+)
 from api.core.settings import get_settings
 from api.services.key_pool import KeyPool
 from api.services.chat_logger import ChatLogger
@@ -400,6 +407,32 @@ async def limits() -> LimitsResponse:
     snap = rate_manager.snapshot()
     snap["keys"] = key_pool.snapshot()
     return LimitsResponse(**snap)
+
+
+@router.get("/quota", response_model=QuotaStatusResponse)
+async def quota_status(request: Request, session_id: str | None = None) -> QuotaStatusResponse:
+    client_ip = _resolve_client_ip(request)
+
+    keys = [f"ip:{client_ip}"]
+    if session_id:
+        keys.append(f"session:{session_id}")
+
+    allowed, retry_after, blocked_key, statuses = client_window_limiter.check_multi(keys)
+
+    remaining_effective = min((st["remaining"] for st in statuses.values()), default=settings.chat_window_max_requests)
+    blocked_scope = None
+    if blocked_key:
+        blocked_scope = blocked_key.split(":", 1)[0]
+
+    return QuotaStatusResponse(
+        allowed=allowed,
+        blocked_scope=blocked_scope,
+        retry_after_seconds=retry_after,
+        max_requests=settings.chat_window_max_requests,
+        window_seconds=settings.chat_window_seconds,
+        remaining_effective=remaining_effective,
+        scopes=statuses,
+    )
 
 
 @router.post("/sessions", response_model=SessionCreateResponse)

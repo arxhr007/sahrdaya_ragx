@@ -12,6 +12,8 @@ Two limiter layers currently exist:
 - Applied on both endpoints:
   - `POST /api/chat`
   - `POST /api/chat/stream`
+- Introspection endpoint added:
+  - `GET /api/quota?session_id=<optional>` (non-consuming quota check)
 - Returns `HTTP 429` with retry seconds
 - Logs limiter rejections as JSONL `chat_error` with `error_type=client_window_limit`
 
@@ -22,6 +24,7 @@ Two limiter layers currently exist:
   - `location = /api/chat`
   - `location = /api/chat/stream`
 - Uses `limit_req_zone` + `limit_req` and returns `429`
+- Handles CORS and OPTIONS preflight at edge to ensure browser can read limiter errors
 
 ## Why Both Layers Were Needed
 
@@ -33,12 +36,19 @@ Two limiter layers currently exist:
 Core limiter code/config:
 - `api/services/client_window_limiter.py` (new file)
 - `api/routes/chat.py`
+- `api/core/models.py`
 - `api/core/settings.py`
 - `deploy/nginx-docker.conf`
+- `api/app.py` (CORS middleware removed; CORS now handled by Nginx)
 - `.env`
 - `.env.example`
 
-Related documentation updates (not required for runtime):
+Frontend integration (runtime + docs):
+- `frontend-website/lib/api.ts`
+- `frontend-website/components/chat-interface.tsx`
+- `docs/FRONTEND_INTEGRATION.md`
+
+Related documentation updates:
 - `README.md`
 
 ## Exact Environment Variables Introduced
@@ -60,11 +70,37 @@ These map to settings in `api/core/settings.py`:
   - calls `client_window_limiter.consume_multi(limit_keys)`
   - on reject: raises `HTTPException(429, detail=...)`
 
+### Quota Status Endpoint
+- `GET /api/quota?session_id=<optional>` in `api/routes/chat.py`
+- Uses non-consuming limiter checks (`check_multi`) and returns:
+  - `allowed`
+  - `blocked_scope`
+  - `retry_after_seconds`
+  - `remaining_effective`
+  - per-scope details (`used`, `remaining`, `reset_after_seconds`, etc.)
+- Response models are in `api/core/models.py`:
+  - `QuotaScopeStatus`
+  - `QuotaStatusResponse`
+
 ### Nginx-level
 - In `deploy/nginx-docker.conf`:
   - `limit_req_zone $binary_remote_addr zone=chat_limit:10m rate=1r/m;`
   - `limit_req zone=chat_limit burst=4 nodelay;`
   - `limit_req_status 429;`
+  - CORS headers added with `always` to include 429 responses
+  - `OPTIONS` preflight short-circuited with `204`
+
+### Frontend Runtime Handling
+- `frontend-website/lib/api.ts`:
+  - default base URL uses `http://localhost:8080`
+  - robust 429 parsing (header + message)
+  - `ApiError.retryAfterSeconds`
+  - `getQuotaStatus(sessionId?)`
+- `frontend-website/components/chat-interface.tsx`:
+  - pre-send quota check
+  - countdown lock state
+  - disables input/send during lock window
+  - shows visible retry countdown banner
 
 ## How To Remove Limiter Later (Rollback Plan)
 
@@ -91,10 +127,28 @@ These map to settings in `api/core/settings.py`:
   - dedicated `location = /api/chat/stream` limiter block
 - Keep standard proxy `location /` block as before
 
-4. Optional doc cleanup:
-- Remove limiter mention from `README.md` if it was documented there.
+4. Remove quota status endpoint:
+- In `api/routes/chat.py`, remove `GET /api/quota`
+- In `api/core/models.py`, remove:
+  - `QuotaScopeStatus`
+  - `QuotaStatusResponse`
+- In `api/services/client_window_limiter.py`, remove:
+  - `check`
+  - `check_multi`
 
-5. Redeploy after rollback:
+5. CORS ownership rollback decision:
+- Current state: CORS is handled by Nginx, not FastAPI.
+- If you remove Nginx CORS, you must re-enable FastAPI CORS middleware in `api/app.py`.
+
+6. Optional frontend cleanup (if limiter UX should be removed):
+- `frontend-website/lib/api.ts`: remove `retryAfterSeconds` logic + `getQuotaStatus`
+- `frontend-website/components/chat-interface.tsx`: remove countdown lock UI and quota pre-check
+
+7. Optional doc cleanup:
+- Remove limiter mention from `README.md` if it was documented there.
+- Remove limiter sections from `docs/FRONTEND_INTEGRATION.md`.
+
+8. Redeploy after rollback:
 
 ```bash
 docker compose -f docker-compose.nginx.yml down
@@ -105,4 +159,5 @@ docker compose -f docker-compose.nginx.yml up --build -d
 
 - App-level limiter state is in-memory and resets on container restart.
 - Nginx limiter is per source IP seen by Nginx.
+- If both Nginx and FastAPI inject CORS headers, browser may reject with duplicate `Access-Control-Allow-Origin` values.
 - If traffic comes through another proxy/CDN, ensure real client IP is preserved correctly.

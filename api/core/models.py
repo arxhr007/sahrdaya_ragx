@@ -60,3 +60,23 @@ class LimitsResponse(BaseModel):
     reset_seconds_minute: float
     reset_seconds_day: float
     keys: list[dict[str, Any]]
+
+
+class QuotaScopeStatus(BaseModel):
+    max_requests: int
+    window_seconds: int
+    used: int
+    remaining: int
+    retry_after_seconds: int
+    reset_after_seconds: int
+    blocked: bool
+
+
+class QuotaStatusResponse(BaseModel):
+    allowed: bool
+    blocked_scope: str | None = None
+    retry_after_seconds: int
+    max_requests: int
+    window_seconds: int
+    remaining_effective: int
+    scopes: dict[str, QuotaScopeStatus]
