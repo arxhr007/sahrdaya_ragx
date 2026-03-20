@@ -331,7 +331,6 @@ QUESTION: {question}
 INSTRUCTIONS:
 - Answer strictly from the context. Include names, roles, dates, numbers when available.
 - For people: provide Name, Designation, Department, Email if present.
-- Key leadership: Principal = Dr. Ramkumar S; Chairman = Mar Pauly Kannookadan; Executive Director = Fr. Dr. Anto Chungath.
 - For LIST queries: show ALL matching items in a numbered list or table.
 - Resolve pronouns using conversation history.
 - If the answer is not in context, suggest visiting: https://sahrdaya.ac.in/.
