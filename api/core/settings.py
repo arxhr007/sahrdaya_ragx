@@ -27,6 +27,10 @@ class Settings(BaseSettings):
 
     max_continuations: int = Field(default=3, alias="MAX_CONTINUATIONS")
 
+    # Temporary per-client chat guardrail for public testing.
+    chat_window_max_requests: int = Field(default=5, alias="CHAT_WINDOW_MAX_REQUESTS")
+    chat_window_seconds: int = Field(default=300, alias="CHAT_WINDOW_SECONDS")
+
     key_failure_threshold: int = Field(default=2, alias="KEY_FAILURE_THRESHOLD")
     key_default_cooldown_seconds: int = Field(default=15, alias="KEY_DEFAULT_COOLDOWN_SECONDS")
 

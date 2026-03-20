@@ -58,9 +58,13 @@ flowchart TD
         CHAT --> SS["In-memory Session Store"]
         CHAT --> RL["Local Rate + Load Guardrails"]
         CHAT --> KP["Busy-key Failover Pool"]
+        CHAT --> LOG["JSONL Chat Logger"]
         SS --> R
         RL --> R
         KP --> R
+        LOG --> EV["logs/events.jsonl"]
+        LOG --> IPL["logs/<client_ip>.jsonl"]
+        LOG --> ROT["Rotating files\n5MB x 7 backups"]
         OPS --> OBS["Metrics + status endpoints"]
         OBS --> ERR
     end
@@ -163,12 +167,14 @@ flowchart TD
 | `rag_setup.py` | Builds FAISS + BM25 indexes, routes SQL vs RAG, includes single-student fast lookup, and formats SQL output |
 | `main.py` | Interactive CLI chatbot with stats, ASCII dashboard, and session analytics |
 | `api/` | FastAPI app split into `core`, `routes`, and `services` layers |
+| `api/services/chat_logger.py` | JSON Lines chat logging (success + error), per-IP files, rotating handler with retention |
 | `api_main.py` | API entrypoint (Uvicorn) |
 | `.env` / `.env.example` | Runtime settings (keys, limits, CORS, concurrency) |
 | `Dockerfile` | Container image for API service |
 | `docker-compose.yml` | Single-container deployment |
 | `docker-compose.nginx.yml` | 3 API containers + Nginx load balancing |
 | `deploy/nginx-docker.conf` | Nginx upstream/load-balancer config for Docker |
+| `logs/` | Runtime JSONL logs: `events.jsonl` (all events) + `<client_ip>.jsonl` (per-IP) |
 
 ## Prerequisites
 
