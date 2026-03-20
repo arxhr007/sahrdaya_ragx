@@ -6,8 +6,6 @@ A Retrieval-Augmented Generation (RAG) chatbot backend for **Sahrdaya College of
 >
 > **🚀 What's planned next?** See [FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md) for the roadmap: streaming responses, Docker, web frontend, and more.
 >
-> **🧩 Connecting a frontend?** See [FRONTEND_INTEGRATION.md](docs/FRONTEND_INTEGRATION.md) for API payloads, session flow, streaming examples, and frontend integration patterns.
->
 > **🤝 Contribution status:** See [CONTRIBUTING.md](docs/CONTRIBUTING.md). For now, we are not accepting PRs; please open Issues.
 
 ## Quick Run
@@ -105,8 +103,9 @@ flowchart TD
     end
 
     subgraph RUNTIME["❓ Query Runtime"]
-        R(["🧑 User<br/>Query"]) --> S["📝 Chat<br/>History"]
-        R --> SF["👤 Student Name<br/>Fast Path"]
+        R(["🧑 User<br/>Query"]) --> QC["✍️ LLM Query<br/>Typo Corrector"]
+        QC --> S["📝 Chat<br/>History"]
+        QC --> SF["👤 Student Name<br/>Fast Path"]
         SF -->|"match"| V
         SF -->|"no match"| T
         S --> T{"🧠 LLM<br/>Classifier"}

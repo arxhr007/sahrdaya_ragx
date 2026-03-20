@@ -11,6 +11,7 @@ Things to fix, improve, and add to the RAG pipeline.
 - ✅ (DONE) **`.gitignore`** — Added with entries for `.index_cache/`, `__pycache__/`, `.env`, `venv/`, IDE folders, OS files, and debug scripts
 - ✅ (DONE) **Shared SQL database build pipeline** — `sql_db_setup.py` now orchestrates `faculty_extractor.py`, `former_people_extractor.py`, and `student_db.py` into `data/sql/college.db`. Faculty parsing supports both legacy profile blocks and listing/card chunks
 - ✅ (DONE) **SQL query routing** — LLM-based classifier in `rag_setup.py` routes bulk faculty queries to SQL and single-person/general queries to RAG. Includes schema-aware prompt, safety (SELECT-only), and automatic fallback to RAG on SQL failure
+- ✅ (DONE) **LLM typo correction (query pre-processing)** — User queries now pass through an LLM typo corrector before SQL routing/retrieval. Uses cached normalization with safe fallback to original query on failure
 - ✅ (DONE) **Session analytics CLI** — `main.py` tracks per-query stats (response time, tokens, chunks) and provides `/graph` dashboard with ASCII bar charts, sparklines, chunk heatmaps, and context growth visualisation
 - ✅ (DONE) **Index cache invalidation** — MD5 hash of `data/processed/data_cleaned.jsonl` stored alongside cached indexes. Automatically rebuilds when data changes
 
@@ -57,11 +58,11 @@ Things to fix, improve, and add to the RAG pipeline.
 ## Infrastructure & DevOps
 
 - ✅ (DONE) **Docker container + compose deployment** — `Dockerfile`, `docker-compose.yml`, and `docker-compose.nginx.yml` support single-container or Nginx-balanced multi-replica deployment
-- 🟡 (Partial) **Logging** — *Partially done*: `main.py` tracks per-query stats (response time, token estimates, chunk IDs, SQL queries) in `session_stats` and displays via `/stats` and `/graph`. Missing: persistent structured logging to file (JSON lines), query logs across sessions, error logging
-- 🟡 (Partial) **Rate limiting** — Local RPM/TPM/RPD/TPD guardrails and load controls are implemented; global distributed rate limiting is still pending
+- 🟡 (Partial) **Logging** — *Partially done*: API-side structured JSONL logging is implemented via `api/services/chat_logger.py` (events + per-IP logs, including error logging). CLI/session analytics are also available via `/stats` and `/graph`. Missing: centralized cross-instance aggregation and long-term analytics storage
+- 🟡 (Partial) **Rate limiting** — *Partially done*: dual-layer limits are implemented for testing (Nginx edge + app-level sliding window, with `/api/quota` status). Remaining work: production-grade distributed limiter with persistent shared backend and finalized policy
 - 🔶 (Pending) **Caching** — Cache responses for identical or near-identical queries. Many users ask the same questions ("who is the principal", "admission process")
 - 🔶 (Pending) **Scheduled re-scraping** — Auto-scrape the website on a schedule (weekly/monthly) and reprocess data to keep the chatbot up to date
-- ✅ (DONE) **API server** — FastAPI service is live with chat, streaming, sessions, health/readiness/load/limits endpoints
+- ✅ (DONE) **API server** — FastAPI service is live with chat, streaming, sessions, health/readiness/load/limits/quota endpoints
 
 ---
 
@@ -72,4 +73,4 @@ Things to fix, improve, and add to the RAG pipeline.
 - 🔶 (Pending) **User feedback loop** — Let users rate answers as helpful/not helpful. Use this to identify weak spots in retrieval
 - 🟡 (Partial) **Analytics dashboard** — *Partially done*: `/graph` command provides a per-session ASCII dashboard with response times, token usage, chunk heatmaps, and sparklines. Missing: persistent cross-session analytics, web-based dashboard, most-asked-questions tracking
 - 🔶 (Pending) **Voice input** — Integrate speech-to-text for accessibility
-- 🔶 (Pending) **Web frontend** — Build a chat UI (React/Next.js) that connects to the FastAPI backend
+- ✅ (DONE) **Web frontend** — Next.js chat UI is live and connected to the FastAPI backend (landing, about, terms, consent gate, quota-aware chat UX)

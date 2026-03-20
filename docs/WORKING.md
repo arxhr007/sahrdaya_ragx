@@ -27,8 +27,9 @@ flowchart LR
     B -->|sql_db_setup.py| I[🗃️ data/sql/college.db]
     C -->|rag_setup.py| D[🔍 BM25 Index]
     C -->|rag_setup.py| E[🧠 FAISS Vector Index]
-    F[❓ User Query] --> G{🧠 LLM Classifier}
-  F --> FS[👤 Student Fast Lookup]
+    F[❓ User Query] --> QC[✍️ LLM Query Typo Corrector]
+    QC --> G{🧠 LLM Classifier}
+  QC --> FS[👤 Student Fast Lookup]
   FS -->|match| H[📊 SQL Engine]
   FS -->|no match| G
   G -->|bulk faculty/former/students| H
@@ -447,7 +448,22 @@ flowchart TD
 
 ### 4.1 Query Expansion
 
-Before searching, abbreviations and short terms are expanded so both indexes get more to work with:
+Before searching, the query goes through a two-step pre-processing stage:
+
+1. **LLM typo correction** — fixes spelling mistakes while preserving intent and entities
+2. **Query expansion** — expands abbreviations/short terms so both indexes get better lexical + semantic signals
+
+Example:
+
+```
+INPUT:   "hwo is the hod of cse"
+STEP 1:  "who is the hod of cse"
+STEP 2:  "who is the Head of Department HOD Manishankar Drisya Dhanya
+          Vijikala Sukhila Jis Paul Ambily Francis
+          of Computer Science Engineering CSE"
+```
+
+Expansion examples:
 
 ```
 INPUT:   "who is the hod of cse"
@@ -456,7 +472,7 @@ OUTPUT:  "who is the Head of Department HOD Manishankar Drisya Dhanya
           of Computer Science Engineering CSE"
 ```
 
-This is regex-based — fast and predictable. Expansions are defined for:
+Expansions are regex-based and defined for:
 - Department abbreviations: CSE, ECE, EEE, BME, BT, ASH, CE, ME
 - Leadership roles: principal, chairman, executive director
 - Common terms: placement, admission
@@ -869,9 +885,7 @@ Every query follows this dual-path flow:
 flowchart TD
     A[User Input] --> B{Slash command?}
     B -->|Yes| C[Execute command]
-    B -->|No| FM{Former keyword?}
-    FM -->|Yes| I
-    FM -->|No| D[SQL Classification]
+  B -->|No| D[SQL Classification]
     D --> E{SQL query generated?}
     E -->|Yes| F[Execute SQL on data/sql/college.db]
     F --> G{SQL succeeded?}
