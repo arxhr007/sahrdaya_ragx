@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS students (
 );
 """
 
+# Header aliases for evolving CSV exports. Keep old spellings for backward compatibility.
+_PHOTO_KEYS = ["photo", "Photo", "photo_url", "photo url"]
+_INSTAGRAM_KEYS = ["instagram(username)", "instagram(profile url)", "instagram", "instagram username"]
+_GITHUB_KEYS = ["Github(url)", "github(url)", "github", "github_url"]
+_PROJECTS_KEYS = ["projects(links seprated by commas)", "projects", "projects_links"]
+_LINKEDIN_KEYS = ["linkedin(url)", "linkedin", "linkedin_url"]
+_WEBSITE_KEYS = ["personal website", "website", "personal_website"]
+
 CREATE_INTERESTS_TABLE = """
 CREATE TABLE IF NOT EXISTS interests (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,12 +213,12 @@ def load_students_into_connection(conn: sqlite3.Connection, csv_path: str = STUD
                 grad_year,
                 department,
                 _first_non_empty(row, ["biography", "bio", "Bio"]),
-                _first_non_empty(row, ["photo", "Photo", "photo_url"]),
-                _first_non_empty(row, ["instagram(username)", "instagram", "instagram username"]),
-                _first_non_empty(row, ["Github(url)", "github(url)", "github", "github_url"]),
-                _first_non_empty(row, ["projects(links seprated by commas)", "projects", "projects_links"]),
-                _first_non_empty(row, ["linkedin(url)", "linkedin", "linkedin_url"]),
-                _first_non_empty(row, ["personal website", "website", "personal_website"]),
+                _first_non_empty(row, _PHOTO_KEYS),
+                _first_non_empty(row, _INSTAGRAM_KEYS),
+                _first_non_empty(row, _GITHUB_KEYS),
+                _first_non_empty(row, _PROJECTS_KEYS),
+                _first_non_empty(row, _LINKEDIN_KEYS),
+                _first_non_empty(row, _WEBSITE_KEYS),
             ),
         )
 

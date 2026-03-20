@@ -1,6 +1,6 @@
 // API configuration and utility functions for RAG backend
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace(/\/$/, "")
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://100.87.199.115:8080").replace(/\/$/, "")
 
 export class ApiError extends Error {
   status: number

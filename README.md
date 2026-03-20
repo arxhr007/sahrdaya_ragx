@@ -89,7 +89,7 @@ flowchart TD
         STCSV["🧾 data/students.csv"] --> STING["👩‍🎓 student_db.py<br/>Normalizer + Loader"]
         I -->|"~109 profiles<br/>16 columns"| K["🗃️ SQLite DB<br/>data/sql/college.db"]
         IP -->|"52 records<br/>10 roles"| K
-        STING -->|"students + interests + links<br/>incl. photo/projects"| K
+        STING -->|"students + interests + links<br/>projects + socials"| K
     end
 
     subgraph INDEX["📊 Dual Index Layer"]
@@ -161,7 +161,7 @@ flowchart TD
 | `faculty_extractor.py` | Parses faculty data from raw chunks (supports both legacy profile blocks and current listing-style chunks) |
 | `former_people_extractor.py` | Parses and inserts former office-bearers into `former_people` |
 | `student_db.py` | Loads `data/students.csv`, normalizes interests, and populates `students`, `interests`, `student_interests` |
-| `data/students.csv` | Student source data (bio/biography, interests, photo URL, social links, projects links) |
+| `data/students.csv` | Student source data (bio/biography, interests, social links, projects links; photo is optional) |
 | `data/sql/college.db` | Shared SQLite database for faculty, former people, students, and canonical interests |
 | `sql_smoke_test.py` | Quick DB validation (schema + row sanity checks after ingestion/parser changes) |
 | `rag_setup.py` | Builds FAISS + BM25 indexes, routes SQL vs RAG, includes single-student fast lookup, and formats SQL output |
@@ -260,7 +260,7 @@ If `data/sql/college.db` doesn't exist, it's auto-built from `data/raw/sahrdaya_
 Student data from `data/students.csv` is also loaded at startup into `students`, `interests`, and `student_interests` in the same DB.
 For a quick integrity check after parser or ingestion updates, run `python sql_smoke_test.py`.
 
-Student profile SQL output includes: name, graduation year, department, bio, photo URL, Instagram, GitHub, projects links, LinkedIn, and website.
+Student profile SQL output includes: name, graduation year, department, bio, Instagram, GitHub, projects links, LinkedIn, and website (photo is optional when available).
 
 ### Step 4 — Run the FastAPI chatbot server
 

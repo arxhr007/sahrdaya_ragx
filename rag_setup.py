@@ -379,7 +379,7 @@ COLUMNS:
     year_of_graduation INTEGER     -- graduation year (e.g., 2027)
     department         TEXT        -- normalized department name
     bio                TEXT        -- short bio
-    photo_url          TEXT        -- photo URL
+    photo_url          TEXT        -- optional photo URL (often empty in newer CSV format)
     instagram_username TEXT        -- instagram username
     github_url         TEXT        -- github URL
     projects_links     TEXT        -- comma-separated project links

@@ -665,7 +665,7 @@ The `former_people` table has 52 records across 10 roles (Chairman, Manager, Exe
 
 Student data is loaded from `data/students.csv` into three normalized tables in `data/sql/college.db`:
 
-- `students` (profile columns including `bio`, `photo_url`, `projects_links`, social links)
+- `students` (profile columns including `bio`, `projects_links`, social links; `photo_url` is optional)
 - `interests` (canonical interest dictionary)
 - `student_interests` (many-to-many links)
 
@@ -678,7 +678,7 @@ User: "people who likes chess"
 
 User: "who is aaron"
 → student-name fast path resolves record directly
-→ Returns formatted profile including photo URL and projects links
+→ Returns formatted profile including projects and social links (photo shown only if available)
 ```
 
 ### Why not use RAG for bulk faculty queries?

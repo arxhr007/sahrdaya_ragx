@@ -20,6 +20,28 @@ interface ChatInterfaceProps {
   initialMessage?: string
 }
 
+// Extract image URLs from message content
+function extractImageUrls(content: string): string[] {
+  const imageUrls: string[] = []
+  
+  // Match markdown image syntax: ![alt](url)
+  const markdownRegex = /!\[.*?\]\((.*?)\)/g
+  let match: RegExpExecArray | null
+  while ((match = markdownRegex.exec(content)) !== null) {
+    imageUrls.push(match[1])
+  }
+  
+  // Match plain URLs to images
+  const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`\[\]]*\.(?:jpg|jpeg|png|gif|webp|svg|bmp))/gi
+  while ((match = urlRegex.exec(content)) !== null) {
+    if (!imageUrls.includes(match[1])) {
+      imageUrls.push(match[1])
+    }
+  }
+  
+  return imageUrls
+}
+
 export function ChatInterface({ sessionId = "default", initialMessage }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
@@ -273,11 +295,28 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
                 }`}
               >
                 {message.role === "assistant" ? (
-                  <div className="prose prose-sm dark:prose-invert max-w-none text-sm overflow-x-auto [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5 [&_pre]:my-2 [&_pre]:bg-black/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_code]:text-xs [&_code]:bg-black/10 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-primary/50 [&_blockquote]:pl-3 [&_blockquote]:italic [&_table]:text-xs [&_table]:w-max [&_table]:min-w-full [&_th]:p-2 [&_td]:p-2 [&_th]:bg-muted/50 [&_tr]:border-b [&_tr]:border-border">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {message.content}
-                    </ReactMarkdown>
-                  </div>
+                  <>
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-sm overflow-x-auto [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5 [&_pre]:my-2 [&_pre]:bg-black/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_code]:text-xs [&_code]:bg-black/10 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-primary/50 [&_blockquote]:pl-3 [&_blockquote]:italic [&_table]:text-xs [&_table]:w-max [&_table]:min-w-full [&_th]:p-2 [&_td]:p-2 [&_th]:bg-muted/50 [&_tr]:border-b [&_tr]:border-border">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                    {extractImageUrls(message.content).length > 0 && (
+                      <div className="mt-3 space-y-2 flex flex-col">
+                        {extractImageUrls(message.content).map((imageUrl, idx) => (
+                          <img
+                            key={idx}
+                            src={imageUrl}
+                            alt={`Response image ${idx + 1}`}
+                            className="max-w-sm rounded-lg border border-border/50 max-h-96 object-cover"
+                            onError={(e) => {
+                              ;(e.target as HTMLImageElement).style.display = "none"
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                 )}
