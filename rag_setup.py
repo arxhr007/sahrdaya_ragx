@@ -8,6 +8,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 from operator import itemgetter
+from functools import lru_cache
 import json
 import os
 import re
@@ -25,6 +26,33 @@ from sql_extractors.student_db import ensure_student_data
 URL_PATTERN = re.compile(r"https?://[^\s)\]\}>\"']+")
 
 # ============ QUERY EXPANSION ============
+
+_query_correct_chain = None
+
+
+def normalize_user_query(question: str) -> str:
+    """Apply LLM-based query correction before routing/retrieval."""
+    normalized = (question or "").strip()
+    if not normalized:
+        return ""
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return _llm_correct_query(normalized)
+
+
+@lru_cache(maxsize=512)
+def _llm_correct_query(query: str) -> str:
+    """Use the configured LLM to correct spelling/typos while preserving intent."""
+    if not query:
+        return query
+    if _query_correct_chain is None:
+        return query
+    try:
+        corrected = _query_correct_chain.invoke({"question": query}).strip()
+        corrected = corrected.strip("`\"'")
+        corrected = re.sub(r"\s+", " ", corrected).strip()
+        return corrected or query
+    except Exception:
+        return query
 
 _QUERY_EXPANSIONS = {
     r"\bcse\b":   "Computer Science Engineering CSE",
@@ -46,9 +74,10 @@ _QUERY_EXPANSIONS = {
 
 def expand_query(question: str) -> str:
     """Expand abbreviated terms in the query for better embedding match."""
-    expanded = question
+    normalized_question = normalize_user_query(question)
+    expanded = normalized_question
     for pattern, replacement in _QUERY_EXPANSIONS.items():
-        if re.search(pattern, question, re.IGNORECASE):
+        if re.search(pattern, normalized_question, re.IGNORECASE):
             expanded = re.sub(pattern, replacement, expanded, flags=re.IGNORECASE)
     return expanded
 
@@ -243,6 +272,22 @@ llm = ChatGroq(
     groq_api_key=GROQ_API_KEY,
     model_name="openai/gpt-oss-120b"
 )
+
+_QUERY_CORRECT_PROMPT = ChatPromptTemplate.from_template("""You are a query typo corrector for a college chatbot.
+
+Task:
+- Correct spelling mistakes and minor grammar in the user query.
+- Preserve original meaning and intent exactly.
+- Preserve entities/acronyms like CSE, ECE, BME, HOD, SCET.
+- Do not add new facts.
+- Do not answer the query.
+
+Return only the corrected query text, nothing else.
+
+User query: {question}
+""")
+
+_query_correct_chain = _QUERY_CORRECT_PROMPT | llm | StrOutputParser()
 
 # Max characters for context (to stay under token limit ~6000 tokens = ~24000 chars)
 MAX_CONTEXT_CHARS = 22000
@@ -616,13 +661,15 @@ def _is_bulk_entity_query(question: str) -> bool:
 
 def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str | None:
     """Ask the LLM if this question needs SQL. Returns SQL string or None."""
+    normalized_question = normalize_user_query(question)
+
     # Fast path: explicit single-person student lookups should not depend on RAG.
-    direct_student_sql = _student_single_lookup_sql(question)
+    direct_student_sql = _student_single_lookup_sql(normalized_question)
     if direct_student_sql:
         return direct_student_sql
 
     # Hard gate: only attempt SQL for explicit bulk faculty/former/student asks.
-    if not _is_bulk_entity_query(question):
+    if not _is_bulk_entity_query(normalized_question):
         return None
 
     # Truncate history to avoid blowing the token limit — the classifier
@@ -630,7 +677,7 @@ def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str
     trimmed_history = chat_history_text[-_SQL_HISTORY_LIMIT:] if chat_history_text else ""
     result = _sql_classify_chain.invoke({
         "schema": _FACULTY_SCHEMA,
-        "question": question,
+        "question": normalized_question,
         "chat_history": trimmed_history,
     }).strip()
 
@@ -858,7 +905,7 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
 
 def retrieve_context(inputs):
     """Hybrid BM25 + Vector retrieval with cross-encoder reranking."""
-    question = inputs["question"]
+    question = normalize_user_query(inputs["question"])
     expanded = expand_query(question)
 
     is_list = is_list_query(question)
@@ -875,6 +922,7 @@ def retrieve_context(inputs):
 
 def retrieve_with_metadata(question):
     """Retrieve docs with reranking and return (formatted_context, list_of_chunk_ids, num_docs)."""
+    question = normalize_user_query(question)
     expanded = expand_query(question)
     is_list = is_list_query(question)
     active = retriever_large if is_list else retriever
@@ -944,6 +992,7 @@ def _extract_urls_from_docs(doc_list, limit=8):
 def retrieve_supporting_urls(question, limit=6):
     """Retrieve likely relevant docs for link-heavy queries and return direct URLs."""
 
+    question = normalize_user_query(question)
     q = (question or "").lower()
     tokens = set(re.findall(r"[a-z0-9]{3,}", q))
     stop = {
