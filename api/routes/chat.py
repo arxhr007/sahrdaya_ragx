@@ -2,8 +2,6 @@ import asyncio
 import json
 import re
 import time
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -15,6 +13,7 @@ import rag_setup
 from api.core.models import ChatRequest, ChatResponse, LimitsResponse, LoadResponse, SessionCreateResponse
 from api.core.settings import get_settings
 from api.services.key_pool import KeyPool
+from api.services.chat_logger import ChatLogger
 from api.services.load_control import LoadController
 from api.services.rate_limit_manager import RateLimitManager
 from api.services.session_store import SessionStore
@@ -39,9 +38,9 @@ load_control = LoadController(
     max_concurrent=settings.max_concurrent_requests,
     queue_wait_seconds=settings.queue_wait_seconds,
 )
+chat_logger = ChatLogger()
 
 URL_PATTERN = re.compile(r"https?://[^\s)\]\}>\"']+")
-LOGS_DIR = Path("logs")
 
 
 def _resolve_client_ip(request: Request) -> str:
@@ -51,23 +50,6 @@ def _resolve_client_ip(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
-
-
-def _ip_to_filename(ip: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", ip.strip() or "unknown")
-    return safe or "unknown"
-
-
-def _append_chat_log(client_ip: str, session_id: str, question: str, answer: str, mode: str) -> None:
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOGS_DIR / f"{_ip_to_filename(client_ip)}.log"
-    ts = datetime.now(timezone.utc).isoformat()
-    with log_file.open("a", encoding="utf-8") as f:
-        f.write(f"[{ts}] session={session_id} mode={mode}\n")
-        f.write(f"Q: {question.strip()}\n")
-        f.write("A:\n")
-        f.write(answer.rstrip() + "\n")
-        f.write("-" * 80 + "\n")
 
 
 def _extract_text(content: Any) -> str:
@@ -370,7 +352,14 @@ async def _process_chat(req: ChatRequest, session_id: str, client_ip: str = "unk
         }
 
         try:
-            _append_chat_log(client_ip, session_id, req.message, answer, mode)
+            chat_logger.log_success(
+                client_ip=client_ip,
+                session_id=session_id,
+                question=req.message,
+                answer=answer,
+                mode=mode,
+                metadata=metadata,
+            )
         except Exception:
             # Logging should never affect API response behavior.
             pass
@@ -436,7 +425,34 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     session_store.cleanup()
     session_id = session_store.get_or_create(req.session_id)
     client_ip = _resolve_client_ip(request)
-    return await _process_chat(req, session_id, client_ip)
+    try:
+        return await _process_chat(req, session_id, client_ip)
+    except HTTPException as exc:
+        try:
+            chat_logger.log_error(
+                client_ip=client_ip,
+                session_id=session_id,
+                question=req.message,
+                status_code=exc.status_code,
+                error_type="http_exception",
+                error_message=str(exc.detail),
+            )
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            chat_logger.log_error(
+                client_ip=client_ip,
+                session_id=session_id,
+                question=req.message,
+                status_code=500,
+                error_type=exc.__class__.__name__,
+                error_message=str(exc),
+            )
+        except Exception:
+            pass
+        raise
 
 
 @router.post("/chat/stream")
@@ -444,7 +460,34 @@ async def chat_stream(req: ChatRequest, request: Request):
     session_store.cleanup()
     session_id = session_store.get_or_create(req.session_id)
     client_ip = _resolve_client_ip(request)
-    response = await _process_chat(req, session_id, client_ip)
+    try:
+        response = await _process_chat(req, session_id, client_ip)
+    except HTTPException as exc:
+        try:
+            chat_logger.log_error(
+                client_ip=client_ip,
+                session_id=session_id,
+                question=req.message,
+                status_code=exc.status_code,
+                error_type="http_exception",
+                error_message=str(exc.detail),
+            )
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            chat_logger.log_error(
+                client_ip=client_ip,
+                session_id=session_id,
+                question=req.message,
+                status_code=500,
+                error_type=exc.__class__.__name__,
+                error_message=str(exc),
+            )
+        except Exception:
+            pass
+        raise
 
     async def events():
         payload = {"session_id": response.session_id}
