@@ -8,6 +8,20 @@ A Retrieval-Augmented Generation (RAG) chatbot backend for **Sahrdaya College of
 >
 > **🤝 Contribution status:** See [CONTRIBUTING.md](docs/CONTRIBUTING.md). For now, we are not accepting PRs; please open Issues.
 
+## Tech Stack
+
+- **Backend API**: FastAPI, Uvicorn, Pydantic
+- **LLM Orchestration**: LangChain, LangChain Core, LangChain Groq
+- **LLM Provider/Model**: Groq (`openai/gpt-oss-120b`)
+- **Retrieval**: Hybrid BM25 + FAISS Vector Search + Cross-Encoder Reranking
+- **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2`
+- **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2`
+- **Data Processing**: Playwright, BeautifulSoup, NLTK, custom preprocessing pipeline
+- **Database**: SQLite (faculty, former people, students, interests)
+- **Frontend**: Next.js (App Router), React, TypeScript, Tailwind CSS
+- **Deployment**: Docker, Docker Compose, Nginx (load balancing + edge rate limiting)
+- **Observability**: JSONL logging, health/readiness/load/limits endpoints, CLI session analytics
+
 ## Quick Run
 
 ```bash
