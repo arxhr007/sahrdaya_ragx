@@ -11,6 +11,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./.index_cache:/app/.index_cache
+      - ./logs:/app/logs
       - ${USERPROFILE}/.cache/huggingface:/root/.cache/huggingface
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]

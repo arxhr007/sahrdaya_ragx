@@ -2,9 +2,11 @@ import asyncio
 import json
 import re
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_groq import ChatGroq
@@ -39,6 +41,33 @@ load_control = LoadController(
 )
 
 URL_PATTERN = re.compile(r"https?://[^\s)\]\}>\"']+")
+LOGS_DIR = Path("logs")
+
+
+def _resolve_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _ip_to_filename(ip: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", ip.strip() or "unknown")
+    return safe or "unknown"
+
+
+def _append_chat_log(client_ip: str, session_id: str, question: str, answer: str, mode: str) -> None:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = LOGS_DIR / f"{_ip_to_filename(client_ip)}.log"
+    ts = datetime.now(timezone.utc).isoformat()
+    with log_file.open("a", encoding="utf-8") as f:
+        f.write(f"[{ts}] session={session_id} mode={mode}\n")
+        f.write(f"Q: {question.strip()}\n")
+        f.write("A:\n")
+        f.write(answer.rstrip() + "\n")
+        f.write("-" * 80 + "\n")
 
 
 def _extract_text(content: Any) -> str:
@@ -271,7 +300,7 @@ async def _answer_rag(question: str, history_text: str, context_str: str) -> tup
     return answer, key
 
 
-async def _process_chat(req: ChatRequest, session_id: str) -> ChatResponse:
+async def _process_chat(req: ChatRequest, session_id: str, client_ip: str = "unknown") -> ChatResponse:
     acquired = await load_control.acquire()
     if not acquired:
         raise HTTPException(status_code=503, detail="Server busy, queue timeout reached")
@@ -340,6 +369,12 @@ async def _process_chat(req: ChatRequest, session_id: str) -> ChatResponse:
             "key_used_hint": key_hint,
         }
 
+        try:
+            _append_chat_log(client_ip, session_id, req.message, answer, mode)
+        except Exception:
+            # Logging should never affect API response behavior.
+            pass
+
         return ChatResponse(
             session_id=session_id,
             answer=answer,
@@ -397,17 +432,19 @@ async def delete_session(session_id: str) -> Response:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     session_store.cleanup()
     session_id = session_store.get_or_create(req.session_id)
-    return await _process_chat(req, session_id)
+    client_ip = _resolve_client_ip(request)
+    return await _process_chat(req, session_id, client_ip)
 
 
 @router.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request):
     session_store.cleanup()
     session_id = session_store.get_or_create(req.session_id)
-    response = await _process_chat(req, session_id)
+    client_ip = _resolve_client_ip(request)
+    response = await _process_chat(req, session_id, client_ip)
 
     async def events():
         payload = {"session_id": response.session_id}
