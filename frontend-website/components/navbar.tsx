@@ -6,11 +6,7 @@ import { MessageSquare } from "lucide-react"
 
 export function Navbar() {
   return (
-    <nav className="fixed top-0 left-0 right-0 h-14 md:h-16 bg-white/50 backdrop-blur-sm border-b flex items-center justify-between px-3 md:px-6 z-50">
-      <div className="flex items-center gap-2 text-primary font-semibold">
-        <span className="text-sm">RAGx</span>
-      </div>
-
+    <nav className="fixed top-0 left-0 right-0 h-14 md:h-16 bg-white/50 backdrop-blur-sm border-b flex items-center justify-end px-3 md:px-6 z-50">
       <div className="flex items-center gap-3">
         <Link href="/chat">
           <Button
