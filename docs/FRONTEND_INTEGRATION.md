@@ -12,6 +12,8 @@ http://127.0.0.1:8080
 
 ## Temporary Public-Test Limiter
 
+⚠️ **This limiter is TEMPORARY for public testing only and will be completely removed in production.**
+
 For public testing, chat endpoints are temporarily capped to reduce abuse.
 
 - Limit: **5 chat requests per 5 minutes**
@@ -21,6 +23,8 @@ For public testing, chat endpoints are temporarily capped to reduce abuse.
 - Scope:
   - per client IP (global at Nginx)
   - plus app-level IP/session checks
+- **Reset Behavior**: The limit uses a sliding 5-minute window. Once the countdown timer reaches 0, you'll have fresh quota and can send messages again immediately.
+- **Frontend UX**: When rate limited, you'll see a countdown banner ("Rate limited. Try again in Xs."), input disabled, and the countdown timer updates live every second.
 
 When exceeded, backend returns `HTTP 429` with a message like:
 

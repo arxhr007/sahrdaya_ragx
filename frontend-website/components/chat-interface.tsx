@@ -230,6 +230,13 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
         </div>
       </div>
 
+      {/* Testing Notice */}
+      <div className="flex-shrink-0 px-4 py-2 bg-blue-50 border-b border-blue-200">
+        <p className="text-xs text-blue-700">
+          <strong>Testing Mode:</strong> This chat is limited to 5 messages per 5 minutes. This rate limiting is temporary for public testing only and will be removed in production.
+        </p>
+      </div>
+
       {/* Messages */}
       <div 
         ref={scrollContainerRef}
@@ -313,7 +320,7 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
 
       {isRateLimited && (
         <div className="flex-shrink-0 px-4 py-2 bg-amber-50 border-t border-amber-200">
-          <p className="text-xs text-amber-700">Rate limited. Try again in {retryAfterSeconds}s.</p>
+          <p className="text-xs text-amber-700"><strong>Rate Limited:</strong> You've exceeded the 5 messages per 5 minutes limit. Try again in {retryAfterSeconds}s. (Testing mode only — this will be removed in production.)</p>
         </div>
       )}
 

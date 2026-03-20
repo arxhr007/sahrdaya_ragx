@@ -2,6 +2,26 @@
 
 This document explains the temporary chat limiter added for public testing, and exactly which files were modified so another AI (or developer) can remove it cleanly later.
 
+---
+
+## ⚠️ TESTING NOTICE
+
+**This rate limiter is TEMPORARY for public testing only and will be completely removed in production.**
+
+### Limiter Behavior
+- **Limit**: 5 chat requests per 5 minutes (per IP + per session)
+- **What happens**: After 5 requests within a 5-minute sliding window, you'll be rate limited with a "Rate limited. Try again in Xs." message
+- **Reset**: The limit resets automatically on a sliding 5-minute window. Once you've waited for the countdown timer to reach 0, you'll have new quota again
+- **Result**: This ensures fair usage during public testing. It will not exist in production once testing is complete
+
+### User Experience
+When rate limited, you'll see:
+1. A countdown banner showing "Rate limited. Try again in Xs." where X decreases every second
+2. Chat input field and send button become disabled during the countdown
+3. Once the timer reaches 0, you can send messages again immediately
+
+---
+
 ## What Was Added
 
 Two limiter layers currently exist:
