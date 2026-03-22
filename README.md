@@ -96,6 +96,8 @@ flowchart TD
         E -->|"NLTK sentence<br/>tokenizer"| F["✂️ Sentence<br/>Splitter"]
         F -->|"regex +<br/>pattern match"| G["🏷️ Category<br/>Tagger"]
         G -->|"alias<br/>injection"| H["📦 data/processed/data_cleaned.jsonl<br/>18 categories"]
+        STTXT["📝 data/raw/student_inputs/*.txt"] --> STTXTLOAD["🧩 TXT Block Loader<br/>preprocess_data.py"]
+        STTXTLOAD -->|"blank-line split<br/>+ chunk merge"| H
         E -->|"role-label<br/>parsing"| FP["👥 Former People<br/>Structurer"]
         FP -->|"10 role chunks<br/>+ summary"| H
         E -->|"legacy + listing<br/>parsing"| I["👤 Faculty<br/>Extractor"]
