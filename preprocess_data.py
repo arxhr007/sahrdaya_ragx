@@ -6,6 +6,7 @@ Usage:
     python preprocess_data.py
 
 Input:  data/raw/sahrdaya_rag.txt  (raw scraped chunks:  chunk_N<TAB>content)
+        data/raw/student_inputs/*.txt (optional plain-text student data files)
 Output: data/processed/data_cleaned.jsonl (one JSON object per optimized chunk)
 """
 
@@ -254,6 +255,7 @@ def _split_text(text: str) -> list[str]:
 
 INPUT_FILE  = "data/raw/sahrdaya_rag.txt"
 OUTPUT_FILE = "data/processed/data_cleaned.jsonl"
+STUDENT_INPUT_DIR = "data/raw/student_inputs"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -390,6 +392,45 @@ def _parse_former_people(text: str) -> list[dict] | None:
     return result
 
 
+def _load_student_input_chunks(input_dir: str) -> list[tuple[str, str]]:
+    """Load plain-text student input files and convert them to raw chunk tuples.
+
+    Each .txt file is split by blank lines. Every non-empty block becomes one raw chunk.
+    """
+    if not os.path.isdir(input_dir):
+        return []
+
+    txt_files = sorted(
+        name for name in os.listdir(input_dir)
+        if name.lower().endswith(".txt")
+    )
+    chunks: list[tuple[str, str]] = []
+
+    for filename in txt_files:
+        file_path = os.path.join(input_dir, filename)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                raw_text = f.read().strip()
+        except OSError as exc:
+            print(f"[!] Skipping {file_path}: {exc}")
+            continue
+
+        if not raw_text:
+            continue
+
+        blocks = [b.strip() for b in re.split(r"\n\s*\n+", raw_text) if b.strip()]
+        file_tag = re.sub(r"[^a-zA-Z0-9]+", "_", os.path.splitext(filename)[0]).strip("_").lower()
+        if not file_tag:
+            file_tag = "student_input"
+
+        for idx, block in enumerate(blocks, 1):
+            # Prefix makes the content easier to retrieve for source/traceability queries.
+            prefixed_block = f"Student-contributed data ({filename}):\n{block}"
+            chunks.append((f"student_{file_tag}_{idx}", prefixed_block))
+
+    return chunks
+
+
 def main():
     if not os.path.exists(INPUT_FILE):
         print(f"[!] {INPUT_FILE} not found — nothing to process.")
@@ -428,7 +469,13 @@ def main():
             raw_chunks[chunk_13_idx] = (c13_id, c13_text + c14_text)
             raw_chunks[chunk_14_idx] = (c14_id, "")  # empty it, will be skipped
 
+    student_chunks = _load_student_input_chunks(STUDENT_INPUT_DIR)
+    if student_chunks:
+        raw_chunks.extend(student_chunks)
+
     print(f"[1/4] Loaded {len(raw_chunks)} raw chunks from {INPUT_FILE}")
+    if student_chunks:
+        print(f"      + Included {len(student_chunks)} extra chunks from {STUDENT_INPUT_DIR}")
 
     # ── Clean ───────────────────────────────────────────────────────────────
     cleaned: list[tuple[str, str]] = []

@@ -247,6 +247,9 @@ python scraper.py https://www.sahrdaya.ac.in/traning-and-placement -o sahrdaya -
 This produces `data/raw/sahrdaya_rag.txt`, which is the default input for preprocessing and DB setup.
 For modal-driven pages (Stats -> Download/Open External), the scraper also captures discovered PDF URLs and stores them as Document Links in the raw output.
 
+To add your own raw student text into RAG, place one or more `.txt` files in `data/raw/student_inputs/`.
+When you run preprocessing, these files are automatically split into chunks and merged into `data/processed/data_cleaned.jsonl`.
+
 ### Step 2 — Preprocess
 
 ```bash
