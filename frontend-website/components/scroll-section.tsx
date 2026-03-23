@@ -14,7 +14,7 @@ const SCROLL_TEXTS = [
   "Explore clubs and organizations",
 ]
 
-const BANNER_TEXT = "SAHRDAYA RAGX • AI-POWERED CAMPUS ASSISTANT • ASK ANYTHING • GET VERIFIED ANSWERS • "
+const BANNER_TEXT = "SAHRDAYA RAGX • AI-POWERED CAMPUS ASSISTANT • ASK ANYTHING • "
 
 export function ScrollSection() {
   const sectionRef = useRef<HTMLDivElement>(null)

@@ -15,13 +15,11 @@ from api.core.models import (
     ChatResponse,
     LimitsResponse,
     LoadResponse,
-    QuotaStatusResponse,
     SessionCreateResponse,
 )
 from api.core.settings import get_settings
 from api.services.key_pool import KeyPool
 from api.services.chat_logger import ChatLogger
-from api.services.client_window_limiter import ClientWindowLimiter
 from api.services.load_control import LoadController
 from api.services.rate_limit_manager import RateLimitManager
 from api.services.session_store import SessionStore
@@ -45,10 +43,6 @@ key_pool = KeyPool(
 load_control = LoadController(
     max_concurrent=settings.max_concurrent_requests,
     queue_wait_seconds=settings.queue_wait_seconds,
-)
-client_window_limiter = ClientWindowLimiter(
-    max_requests=settings.chat_window_max_requests,
-    window_seconds=settings.chat_window_seconds,
 )
 chat_logger = ChatLogger()
 
@@ -409,32 +403,6 @@ async def limits() -> LimitsResponse:
     return LimitsResponse(**snap)
 
 
-@router.get("/quota", response_model=QuotaStatusResponse)
-async def quota_status(request: Request, session_id: str | None = None) -> QuotaStatusResponse:
-    client_ip = _resolve_client_ip(request)
-
-    keys = [f"ip:{client_ip}"]
-    if session_id:
-        keys.append(f"session:{session_id}")
-
-    allowed, retry_after, blocked_key, statuses = client_window_limiter.check_multi(keys)
-
-    remaining_effective = min((st["remaining"] for st in statuses.values()), default=settings.chat_window_max_requests)
-    blocked_scope = None
-    if blocked_key:
-        blocked_scope = blocked_key.split(":", 1)[0]
-
-    return QuotaStatusResponse(
-        allowed=allowed,
-        blocked_scope=blocked_scope,
-        retry_after_seconds=retry_after,
-        max_requests=settings.chat_window_max_requests,
-        window_seconds=settings.chat_window_seconds,
-        remaining_effective=remaining_effective,
-        scopes=statuses,
-    )
-
-
 @router.post("/sessions", response_model=SessionCreateResponse)
 async def create_session() -> SessionCreateResponse:
     session_store.cleanup()
@@ -463,28 +431,6 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     session_store.cleanup()
     session_id = session_store.get_or_create(req.session_id)
     client_ip = _resolve_client_ip(request)
-
-    limit_keys = [f"ip:{client_ip}", f"session:{session_id}"]
-    allowed, retry_after, blocked_key = client_window_limiter.consume_multi(limit_keys)
-    if not allowed:
-        scope = "session" if (blocked_key or "").startswith("session:") else "ip"
-        detail = (
-            f"Temporary chat limit reached for this {scope}. "
-            f"Only {settings.chat_window_max_requests} chats per {settings.chat_window_seconds // 60} minutes are allowed. "
-            f"Retry after ~{retry_after} seconds."
-        )
-        try:
-            chat_logger.log_error(
-                client_ip=client_ip,
-                session_id=session_id,
-                question=req.message,
-                status_code=429,
-                error_type="client_window_limit",
-                error_message=detail,
-            )
-        except Exception:
-            pass
-        raise HTTPException(status_code=429, detail=detail)
 
     try:
         return await _process_chat(req, session_id, client_ip)
@@ -521,28 +467,6 @@ async def chat_stream(req: ChatRequest, request: Request):
     session_store.cleanup()
     session_id = session_store.get_or_create(req.session_id)
     client_ip = _resolve_client_ip(request)
-
-    limit_keys = [f"ip:{client_ip}", f"session:{session_id}"]
-    allowed, retry_after, blocked_key = client_window_limiter.consume_multi(limit_keys)
-    if not allowed:
-        scope = "session" if (blocked_key or "").startswith("session:") else "ip"
-        detail = (
-            f"Temporary chat limit reached for this {scope}. "
-            f"Only {settings.chat_window_max_requests} chats per {settings.chat_window_seconds // 60} minutes are allowed. "
-            f"Retry after ~{retry_after} seconds."
-        )
-        try:
-            chat_logger.log_error(
-                client_ip=client_ip,
-                session_id=session_id,
-                question=req.message,
-                status_code=429,
-                error_type="client_window_limit",
-                error_message=detail,
-            )
-        except Exception:
-            pass
-        raise HTTPException(status_code=429, detail=detail)
 
     try:
         response = await _process_chat(req, session_id, client_ip)

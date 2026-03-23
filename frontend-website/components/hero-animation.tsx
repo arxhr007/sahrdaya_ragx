@@ -8,6 +8,7 @@ import { Send } from "lucide-react"
 
 const QUESTIONS = [
   "List all faculty from CSE",
+  "Who is Aaron",
   "Show students interested in chess",
   "Who is the HOD of CSE?",
   "How many faculty are in BME department?",
@@ -20,6 +21,7 @@ export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: (
   const sahrdayaRef = useRef<HTMLSpanElement>(null)
   const askBarRef = useRef<HTMLDivElement>(null)
   const buttonsRef = useRef<HTMLDivElement>(null)
+  const messageRef = useRef<HTMLParagraphElement>(null)
   const [placeholder, setPlaceholder] = useState(QUESTIONS[0])
   const [inputValue, setInputValue] = useState("")
   const router = useRouter()
@@ -47,8 +49,9 @@ export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: (
 
     gsap.set(sahrdayaRef.current, { opacity: 0, x: -20 })
     gsap.set(ragxRef.current, { y: 100, opacity: 0 })
-    gsap.set(askBarRef.current, { opacity: 0, y: 20 })
+  gsap.set(askBarRef.current, { opacity: 0, y: 20 })
     gsap.set(buttonsRef.current, { opacity: 0, y: 20 })
+    gsap.set(messageRef.current, { opacity: 0, y: 20 })
 
     tl.to(ragxRef.current, {
       y: 0,
@@ -85,13 +88,21 @@ export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: (
         },
         "-=0.5",
       )
+      .to(
+        messageRef.current,
+        {
+          opacity: 1,
+          y: 0,
+          duration: 0.8,
+        },
+        "-=0.3",
+      )
 
     return () => {
       tl.kill()
     }
   }, [])
 
-  // Cycle through placeholder questions
   useEffect(() => {
     let index = 0
     const interval = setInterval(() => {
@@ -126,7 +137,7 @@ export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: (
             placeholder={placeholder}
             className="w-full pl-4 pr-12 py-4 md:py-6 text-base md:text-lg bg-white/50 backdrop-blur-sm border-2 border-primary rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all placeholder:text-muted-foreground/60"
           />
-          <button 
+          <button
             onClick={handleSubmit}
             className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-2.5 md:p-3 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
           >
@@ -162,6 +173,10 @@ export function HeroAnimation({ onAnimationComplete }: { onAnimationComplete?: (
           Project Repo
         </Button>
       </div>
+
+      <p ref={messageRef} className="text-xs font-bold text-foreground mt-4">
+        Use Sahrdaya mail to submit the form
+      </p>
     </div>
   )
 }

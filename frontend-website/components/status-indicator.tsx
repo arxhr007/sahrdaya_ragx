@@ -67,7 +67,7 @@ export function StatusIndicator() {
               status.rag_loaded ? "fill-green-500 text-green-500" : "fill-yellow-500 text-yellow-500"
             }`}
           />
-          RAG {status.rag_loaded ? "Ready" : "Empty"}
+          RAG{status.rag_loaded ? " Ready" : ""}
         </Badge>
       )}
     </div>

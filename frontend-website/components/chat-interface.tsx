@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { sendMessage, clearSession, createSession, getQuotaStatus, ApiError } from "@/lib/api"
+import { sendMessage, clearSession, createSession, ApiError } from "@/lib/api"
 import { Send, Trash2, Loader2, Bot, User, Sparkles } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -49,26 +49,10 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
   const [isCreatingSession, setIsCreatingSession] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeSessionId, setActiveSessionId] = useState(sessionId || "")
-  const [retryUntil, setRetryUntil] = useState(0)
-  const [nowMs, setNowMs] = useState(Date.now())
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const initialMessageSent = useRef(false)
-
-  const retryAfterSeconds = Math.max(0, Math.ceil((retryUntil - nowMs) / 1000))
-  const isRateLimited = retryAfterSeconds > 0
-
-  const lockForSeconds = useCallback((seconds: number) => {
-    if (!Number.isFinite(seconds) || seconds <= 0) return
-    setRetryUntil(Date.now() + seconds * 1000)
-  }, [])
-
-  useEffect(() => {
-    if (!isRateLimited) return
-    const id = setInterval(() => setNowMs(Date.now()), 250)
-    return () => clearInterval(id)
-  }, [isRateLimited])
 
   const ensureSession = useCallback(async () => {
     if (activeSessionId && activeSessionId !== "default") {
@@ -126,7 +110,7 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
 
   // Send a message programmatically
   const sendMessageToChat = useCallback(async (messageContent: string) => {
-    if (!messageContent.trim() || isLoading || isCreatingSession || isRateLimited) return
+    if (!messageContent.trim() || isLoading || isCreatingSession) return
 
     const userMessage: Message = {
       role: "user",
@@ -140,19 +124,6 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
 
     try {
       const currentSessionId = await ensureSession()
-
-      // Sync limiter state from backend before sending to show accurate countdown.
-      try {
-        const quota = await getQuotaStatus(currentSessionId)
-        if (!quota.allowed) {
-          const secs = quota.retry_after_seconds || 1
-          lockForSeconds(secs)
-          setError(`Rate limited. Try again in ${secs}s.`)
-          return
-        }
-      } catch {
-        // Non-blocking: if quota check fails, proceed and let send endpoint decide.
-      }
 
       const response = await sendMessage({
         message: userMessage.content,
@@ -177,9 +148,8 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
           setError("Session expired and a new session could not be created.")
         }
       } else if (err instanceof ApiError && err.status === 429) {
-        const secs = err.retryAfterSeconds || 300
-        lockForSeconds(secs)
-        setError(`Rate limited. Try again in ${secs}s.`)
+        const secs = err.retryAfterSeconds
+        setError(secs ? `Rate limited. Try again in ${secs}s.` : "Rate limited. Please try again shortly.")
       } else {
         setError(err instanceof Error ? err.message : "Failed to send message")
       }
@@ -187,7 +157,7 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
       setIsLoading(false)
       inputRef.current?.focus()
     }
-  }, [ensureSession, isCreatingSession, isLoading, isRateLimited, lockForSeconds])
+  }, [ensureSession, isCreatingSession, isLoading])
 
   // Handle initial message from URL query param
   useEffect(() => {
@@ -198,7 +168,7 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
   }, [activeSessionId, initialMessage, isCreatingSession, sendMessageToChat])
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || isRateLimited) return
+    if (!input.trim() || isLoading) return
     await sendMessageToChat(input.trim())
     setInput("")
   }
@@ -250,13 +220,6 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
             <Trash2 className="w-4 h-4" />
           </Button>
         </div>
-      </div>
-
-      {/* Testing Notice */}
-      <div className="flex-shrink-0 px-4 py-2 bg-blue-50 border-b border-blue-200">
-        <p className="text-xs text-blue-700">
-          <strong>Testing Mode:</strong> This chat is limited to 5 messages per 5 minutes. This rate limiting is temporary for public testing only and will be removed in production.
-        </p>
       </div>
 
       {/* Messages */}
@@ -357,12 +320,6 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
         </div>
       )}
 
-      {isRateLimited && (
-        <div className="flex-shrink-0 px-4 py-2 bg-amber-50 border-t border-amber-200">
-          <p className="text-xs text-amber-700"><strong>Rate Limited:</strong> You've exceeded the 5 messages per 5 minutes limit. Try again in {retryAfterSeconds}s. (Testing mode only — this will be removed in production.)</p>
-        </div>
-      )}
-
       {/* Input */}
       <div className="flex-shrink-0 p-4 border-t bg-white/30">
         <div className="flex gap-2">
@@ -371,13 +328,13 @@ export function ChatInterface({ sessionId = "default", initialMessage }: ChatInt
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyPress}
-            placeholder={isRateLimited ? `Rate limited - retry in ${retryAfterSeconds}s` : "Type your message..."}
-            disabled={isLoading || isCreatingSession || isRateLimited}
+            placeholder="Type your message..."
+            disabled={isLoading || isCreatingSession}
             className="flex-1 bg-white/50 text-sm"
           />
           <Button
             onClick={handleSend}
-            disabled={!input.trim() || isLoading || isCreatingSession || isRateLimited}
+            disabled={!input.trim() || isLoading || isCreatingSession}
             size="icon"
             className="bg-primary hover:bg-primary/90"
           >

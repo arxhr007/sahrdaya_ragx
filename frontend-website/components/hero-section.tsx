@@ -18,7 +18,7 @@ export function HeroSection() {
         }`}
       >
         <h2 className="text-xl md:text-2xl font-semibold text-foreground">
-          Ask anything about our college and get verified answers.
+          Ask anything about our college.
         </h2>
         <p className="mt-3 text-sm md:text-base text-muted-foreground">
           Powered by AI + data from the official college website. No more scrolling PDFs, guessing, or outdated info.

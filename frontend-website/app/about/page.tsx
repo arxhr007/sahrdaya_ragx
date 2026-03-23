@@ -71,6 +71,10 @@ export default function AboutPage() {
             </a>
           </div>
 
+          <p className="mt-4 text-xs font-bold text-foreground">
+            Use Sahrdaya mail to submit the form
+          </p>
+
           <p className="mt-4 text-xs text-muted-foreground">
             Why fill the form: it helps keep student details current and improves answer quality for student-related queries.
           </p>

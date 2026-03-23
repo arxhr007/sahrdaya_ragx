@@ -1,6 +1,6 @@
 // API configuration and utility functions for RAG backend
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace(/\/$/, "")
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "https://ragx-backend.sahrdaya.ac.in").replace(/\/$/, "")
 
 export class ApiError extends Error {
   status: number
@@ -148,26 +148,6 @@ export interface SessionsResponse {
   sessions: Session[]
 }
 
-export interface QuotaScopeStatus {
-  max_requests: number
-  window_seconds: number
-  used: number
-  remaining: number
-  retry_after_seconds: number
-  reset_after_seconds: number
-  blocked: boolean
-}
-
-export interface QuotaStatusResponse {
-  allowed: boolean
-  blocked_scope: string | null
-  retry_after_seconds: number
-  max_requests: number
-  window_seconds: number
-  remaining_effective: number
-  scopes: Record<string, QuotaScopeStatus>
-}
-
 // API Functions
 export async function healthCheck(): Promise<HealthResponse> {
   const res = await apiFetch(`${API_BASE_URL}/api/health`)
@@ -260,12 +240,5 @@ export async function reloadRag(): Promise<{ status: string; message: string }> 
     method: "POST",
   })
   if (!res.ok) throw new Error("Failed to reload RAG")
-  return res.json()
-}
-
-export async function getQuotaStatus(sessionId?: string): Promise<QuotaStatusResponse> {
-  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""
-  const res = await apiFetch(`${API_BASE_URL}/api/quota${query}`)
-  if (!res.ok) throw await parseError(res, "Failed to fetch quota status")
   return res.json()
 }
