@@ -55,6 +55,7 @@ CREATOR_BOOST_TERMS = [
 # ============ QUERY EXPANSION ============
 
 _query_correct_chain = None
+_query_map_chain = None
 
 
 def normalize_user_query(question: str) -> str:
@@ -107,6 +108,58 @@ def expand_query(question: str) -> str:
         if re.search(pattern, normalized_question, re.IGNORECASE):
             expanded = re.sub(pattern, replacement, expanded, flags=re.IGNORECASE)
     return expanded
+
+
+_DEPARTMENT_CANONICAL_MAP = {
+    r"\bcse\b|computer\s+science": "Computer Science Engineering",
+    r"\bece\b|electronics\s+and\s+communication": "Electronics and Communication Engineering",
+    r"\beee\b|electrical\s+and\s+electronics": "Electrical and Electronics Engineering",
+    r"\bbme\b|biomedical": "Biomedical Engineering",
+    r"\bbt\b|biotechnology": "Biotechnology Engineering",
+    r"\bce\b|civil": "Civil Engineering",
+    r"\bmech\b|mechanical": "Mechanical Engineering",
+    r"\bash\b|applied\s+science": "Applied Science and Humanities",
+}
+
+
+def _deterministic_query_map(question: str) -> str:
+    """Map shorthand bulk queries to a canonical form before routing."""
+    q = (question or "").strip()
+    if not q:
+        return ""
+
+    q_lower = q.lower()
+    has_list_intent = bool(re.search(r"\b(list|show|give|who\s+are|all|members?)\b", q_lower))
+    has_people_entity = bool(re.search(r"\b(faculty|faculties|professor|professors|teacher|teachers|staff|hods?|members?)\b", q_lower))
+
+    detected_department = None
+    for pattern, canonical in _DEPARTMENT_CANONICAL_MAP.items():
+        if re.search(pattern, q_lower, re.IGNORECASE):
+            detected_department = canonical
+            break
+
+    # Example: "cse members list" -> "list all faculty in Computer Science Engineering"
+    if detected_department and has_list_intent and has_people_entity:
+        return f"list all faculty in {detected_department}"
+
+    return q
+
+
+def map_query_to_preset(question: str) -> str:
+    """Canonicalize natural-language query shape for reliable SQL/RAG routing."""
+    baseline = _deterministic_query_map(question)
+    if not baseline:
+        return ""
+    if _query_map_chain is None:
+        return baseline
+
+    try:
+        mapped = _query_map_chain.invoke({"question": baseline}).strip()
+        mapped = mapped.strip("`\"'")
+        mapped = re.sub(r"\s+", " ", mapped).strip()
+        return mapped or baseline
+    except Exception:
+        return baseline
 
 
 # ============ LOAD PRE-PROCESSED DATA ============
@@ -332,6 +385,29 @@ User query: {question}
 
 _query_correct_chain = _QUERY_CORRECT_PROMPT | llm | StrOutputParser()
 
+_QUERY_MAP_PROMPT = ChatPromptTemplate.from_template("""You rewrite college chatbot questions into canonical routing-friendly wording.
+
+Goal:
+- Keep the original meaning intact.
+- Rewrite shorthand/fragment queries into a clear full query.
+- Prefer canonical forms for list intents so routing is stable.
+
+Canonical examples:
+- "cse members list" -> "list all faculty in Computer Science Engineering"
+- "ece faculty" -> "list all faculty in Electronics and Communication Engineering"
+- "students into chess" -> "list all students interested in chess"
+- "former principals" -> "list all former Principals"
+
+Rules:
+- Do not answer the question.
+- Do not add facts.
+- Return only one rewritten query line.
+
+User query: {question}
+""")
+
+_query_map_chain = _QUERY_MAP_PROMPT | llm | StrOutputParser()
+
 # Max characters for context (to stay under token limit ~6000 tokens = ~24000 chars)
 MAX_CONTEXT_CHARS = 22000
 
@@ -357,7 +433,8 @@ def is_list_query(question):
                        "all faculty", "all faculties", "all professors", "all teachers",
                        "all hod", "all members", "all staff", "everyone in", "who are the",
                        "faculties from", "faculty from", "faculty of", "faculties of",
-                       "how many faculty", "how many professors", "tell me all"]
+                       "how many faculty", "how many professors", "tell me all",
+                       "members list", "member list", "list members", "list faculty"]
     return any(ind in q_lower for ind in list_indicators)
 
 
@@ -748,6 +825,8 @@ def _is_bulk_entity_query(question: str) -> bool:
 def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str | None:
     """Ask the LLM if this question needs SQL. Returns SQL string or None."""
     normalized_question = normalize_user_query(question)
+    mapped_question = map_query_to_preset(normalized_question)
+    expanded_question = expand_creator_query(expand_query(mapped_question))
 
     # Fast path: explicit single-person student lookups should not depend on RAG.
     direct_student_sql = _student_single_lookup_sql(normalized_question)
@@ -755,7 +834,7 @@ def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str
         return direct_student_sql
 
     # Hard gate: only attempt SQL for explicit bulk faculty/former/student asks.
-    if not _is_bulk_entity_query(normalized_question):
+    if not _is_bulk_entity_query(expanded_question):
         return None
 
     # Truncate history to avoid blowing the token limit — the classifier
@@ -763,7 +842,7 @@ def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str
     trimmed_history = chat_history_text[-_SQL_HISTORY_LIMIT:] if chat_history_text else ""
     result = _sql_classify_chain.invoke({
         "schema": _FACULTY_SCHEMA,
-        "question": normalized_question,
+        "question": expanded_question,
         "chat_history": trimmed_history,
     }).strip()
 
@@ -992,10 +1071,11 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
 def retrieve_context(inputs):
     """Hybrid BM25 + Vector retrieval with cross-encoder reranking."""
     question = normalize_user_query(inputs["question"])
-    expanded = expand_creator_query(expand_query(question))
+    mapped_question = map_query_to_preset(question)
+    expanded = expand_creator_query(expand_query(mapped_question))
 
-    is_list = is_list_query(question)
-    creator_intent = is_creator_query(question)
+    is_list = is_list_query(mapped_question)
+    creator_intent = is_creator_query(mapped_question)
     active = retriever_large if (is_list or creator_intent) else retriever
     # Over-retrieve candidates for the reranker to score
     candidate_k = 80 if creator_intent else (60 if is_list else 25)
@@ -1003,23 +1083,24 @@ def retrieve_context(inputs):
 
     docs = active.invoke(expanded)
     candidates = docs[:candidate_k]
-    reranked = rerank_docs_with_creator_boost(question, candidates, top_k=final_k, creator_intent=creator_intent)
+    reranked = rerank_docs_with_creator_boost(mapped_question, candidates, top_k=final_k, creator_intent=creator_intent)
     return format_docs(reranked)
 
 
 def retrieve_with_metadata(question):
     """Retrieve docs with reranking and return (formatted_context, list_of_chunk_ids, num_docs)."""
     question = normalize_user_query(question)
-    expanded = expand_creator_query(expand_query(question))
-    is_list = is_list_query(question)
-    creator_intent = is_creator_query(question)
+    mapped_question = map_query_to_preset(question)
+    expanded = expand_creator_query(expand_query(mapped_question))
+    is_list = is_list_query(mapped_question)
+    creator_intent = is_creator_query(mapped_question)
     active = retriever_large if (is_list or creator_intent) else retriever
     candidate_k = 80 if creator_intent else (60 if is_list else 25)
     final_k = 20 if creator_intent else (35 if is_list else 10)
 
     docs = active.invoke(expanded)
     candidates = docs[:candidate_k]
-    reranked = rerank_docs_with_creator_boost(question, candidates, top_k=final_k, creator_intent=creator_intent)
+    reranked = rerank_docs_with_creator_boost(mapped_question, candidates, top_k=final_k, creator_intent=creator_intent)
 
     chunk_ids = []
     for doc in reranked:
