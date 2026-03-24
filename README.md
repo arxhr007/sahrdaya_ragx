@@ -120,8 +120,9 @@ flowchart TD
 
     subgraph RUNTIME["❓ Query Runtime"]
         R(["🧑 User<br/>Query"]) --> QC["✍️ LLM Query<br/>Typo Corrector"]
-        QC --> S["📝 Chat<br/>History"]
-        QC --> SF["👤 Student Name<br/>Fast Path"]
+        QC --> QM["🧭 Canonical Query Mapper<br/>deterministic + LLM"]
+        QM --> S["📝 Chat<br/>History"]
+        QM --> SF["👤 Student Name<br/>Fast Path"]
         SF -->|"match"| V
         SF -->|"no match"| T
         S --> T{"🧠 LLM<br/>Classifier"}
@@ -135,7 +136,7 @@ flowchart TD
         end
 
         subgraph RAG["📚 RAG Path"]
-            T -->|"single-person /<br/>general"| Y["🔎 Query<br/>Expansion"]
+            T -->|"single-person /<br/>general"| Y["🔎 Canonical + Query<br/>Expansion"]
             X --> Y
             Y --> Z["⚡ Ensemble<br/>Retriever"]
             L -->|"weight: 0.6"| Z
@@ -181,7 +182,7 @@ flowchart TD
 | `data/students.csv` | Student source data (bio/biography, interests, social links, projects links; photo is optional) |
 | `data/sql/college.db` | Shared SQLite database for faculty, former people, students, and canonical interests |
 | `sql_smoke_test.py` | Quick DB validation (schema + row sanity checks after ingestion/parser changes) |
-| `rag_setup.py` | Builds FAISS + BM25 indexes, routes SQL vs RAG, includes single-student fast lookup, and formats SQL output |
+| `rag_setup.py` | Builds FAISS + BM25 indexes, canonicalizes queries (deterministic + LLM mapping), routes SQL vs RAG, includes single-student fast lookup, and formats SQL output |
 | `main.py` | Interactive CLI chatbot with stats, ASCII dashboard, and session analytics |
 | `api/` | FastAPI app split into `core`, `routes`, and `services` layers |
 | `api/services/chat_logger.py` | JSON Lines chat logging (success + error), per-IP files, rotating handler with retention |

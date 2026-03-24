@@ -28,8 +28,9 @@ flowchart LR
     C -->|rag_setup.py| D[🔍 BM25 Index]
     C -->|rag_setup.py| E[🧠 FAISS Vector Index]
     F[❓ User Query] --> QC[✍️ LLM Query Typo Corrector]
-    QC --> G{🧠 LLM Classifier}
-  QC --> FS[👤 Student Fast Lookup]
+    QC --> QM[🧭 Canonical Query Mapper]
+    QM --> G{🧠 LLM Classifier}
+  QM --> FS[👤 Student Fast Lookup]
   FS -->|match| H[📊 SQL Engine]
   FS -->|no match| G
   G -->|bulk faculty/former/students| H
@@ -51,7 +52,7 @@ flowchart LR
 | 2. Preprocess | Clean, categorise, chunk, inject aliases, structure former people | `preprocess_data.py` |
 | 3. Structured DB | Build shared SQLite data: faculty + former people + students + interests | `sql_db_setup.py`, `student_db.py` |
 | 4. Index | Build BM25 + FAISS search indexes | `rag_setup.py` |
-| 5. Route | Student-name fast path + LLM classification for SQL (bulk faculty/former/students) vs RAG | `rag_setup.py` |
+| 5. Route | Typo correction + canonical query mapping + student-name fast path + LLM classification for SQL (bulk faculty/former/students) vs RAG | `rag_setup.py` |
 | 6. Generate | SQL formatted output for entity queries, LLM answer for general queries | `rag_setup.py` |
 
 ---
@@ -429,36 +430,47 @@ This is the core of the system — how we combine both indexes to find the best 
 
 ```mermaid
 flowchart TD
-    A["User: 'who is the hod of cse'"] --> B[Query Expansion]
-    B --> C["Expanded: 'who is the Head of Department HOD\nManishankar... of Computer Science Engineering CSE'"]
-    C --> D{List query?}
-    D -->|No| E[Point Retriever k=8]
-    D -->|Yes| F[Large Retriever k=50]
-    E --> G[BM25: Top 8 by keywords]
-    E --> H[Vector: Top 8 by meaning MMR]
-    F --> I[BM25: Top 50 by keywords]
-    F --> J[Vector: Top 30 by meaning MMR]
-    G --> K[Reciprocal Rank Fusion]
-    H --> K
-    I --> L[Reciprocal Rank Fusion]
-    J --> L
-    K --> M["Top 12 chunks → LLM"]
-    L --> N["Top 35 chunks → LLM"]
+  A["User: 'cse members list'"] --> B[Typo Correction]
+  B --> C[Canonical Query Mapping]
+  C --> C2["Mapped: 'list all faculty in Computer Science Engineering'"]
+  C2 --> D[Query Expansion]
+  D --> E["Expanded: mapped query + department aliases"]
+  E --> F{List query?}
+  F -->|No| G[Point Retriever k=8]
+  F -->|Yes| H[Large Retriever k=50]
+  G --> I[BM25: Top 8 by keywords]
+  G --> J[Vector: Top 8 by meaning MMR]
+  H --> K[BM25: Top 50 by keywords]
+  H --> L[Vector: Top 30 by meaning MMR]
+  I --> M[Reciprocal Rank Fusion]
+  J --> M
+  K --> N[Reciprocal Rank Fusion]
+  L --> N
+  M --> O["Top 12 chunks → LLM"]
+  N --> P["Top 35 chunks → LLM"]
 ```
 
 ### 4.1 Query Expansion
 
-Before searching, the query goes through a two-step pre-processing stage:
+Before searching, the query goes through a three-step pre-processing stage:
 
 1. **LLM typo correction** — fixes spelling mistakes while preserving intent and entities
-2. **Query expansion** — expands abbreviations/short terms so both indexes get better lexical + semantic signals
+2. **Canonical query mapping** — rewrites shorthand fragments into routing-friendly intent format
+3. **Query expansion** — expands abbreviations/short terms so both indexes get better lexical + semantic signals
 
 Example:
 
 ```
+INPUT:   "cse members list"
+STEP 1:  "cse members list"  (or corrected typo variant)
+STEP 2:  "list all faculty in Computer Science Engineering"
+STEP 3:  "list all faculty in Computer Science Engineering
+          Computer Science Engineering CSE"
+
 INPUT:   "hwo is the hod of cse"
 STEP 1:  "who is the hod of cse"
-STEP 2:  "who is the Head of Department HOD Manishankar Drisya Dhanya
+STEP 2:  "who is the hod of cse"  (already canonical for intent)
+STEP 3:  "who is the Head of Department HOD Manishankar Drisya Dhanya
           Vijikala Sukhila Jis Paul Ambily Francis
           of Computer Science Engineering CSE"
 ```
@@ -472,7 +484,7 @@ OUTPUT:  "who is the Head of Department HOD Manishankar Drisya Dhanya
           of Computer Science Engineering CSE"
 ```
 
-Expansions are regex-based and defined for:
+Canonical mapping is hybrid (deterministic rules + LLM rewrite), then expansions are regex-based and defined for:
 - Department abbreviations: CSE, ECE, EEE, BME, BT, ASH, CE, ME
 - Leadership roles: principal, chairman, executive director
 - Common terms: placement, admission
