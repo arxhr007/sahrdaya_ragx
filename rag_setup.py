@@ -189,8 +189,12 @@ def _deterministic_query_map(question: str) -> str:
         return ""
 
     q_lower = q.lower()
-    has_list_intent = bool(re.search(r"\b(list|show|give|who\s+are|all|members?|staff|professors?)\b", q_lower))
+    # Check for list-intent keywords: explicit list verbs AND "all" when near a department.
+    has_list_intent = bool(re.search(r"\b(list|show|give|members?|staff|faculty|professors?)\b", q_lower))
     has_people_entity = bool(re.search(r"\b(faculty|faculties|professor|professors|teacher|teachers|staff|hods?|members?)\b", q_lower))
+    
+    # Also accept "all" as list intent if accompanied by department.
+    has_all_keyword = bool(re.search(r"\ball\b", q_lower))
 
     detected_department = None
     for pattern, canonical in _DEPARTMENT_CANONICAL_MAP.items():
@@ -198,8 +202,9 @@ def _deterministic_query_map(question: str) -> str:
             detected_department = canonical
             break
 
-    # Example: "cse members list" or "ece faculty" -> canonical faculty list format.
-    if detected_department and (has_list_intent or has_people_entity):
+    # Check for department + list-like pattern (e.g., "cse list all", "cse faculty", "ece members list").
+    # Match if: department + list verb, OR department + people entity, OR department + "all"
+    if detected_department and (has_list_intent or has_people_entity or has_all_keyword):
         return f"list all faculty in {detected_department}"
 
     # Former-role list intent normalization.
