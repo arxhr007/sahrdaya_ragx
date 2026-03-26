@@ -121,8 +121,9 @@ flowchart TD
     subgraph RUNTIME["❓ Query Runtime"]
         R(["🧑 User<br/>Query"]) --> QC["✍️ LLM Query<br/>Typo Corrector"]
         QC --> QM["🧭 Canonical Query Mapper<br/>deterministic + LLM"]
-        QM --> S["📝 Chat<br/>History"]
-        QM --> SF["👤 Student Name<br/>Fast Path"]
+        QM --> QX["🔎 Query Expander<br/>dept + intent terms"]
+        QX --> S["📝 Chat<br/>History"]
+        QX --> SF["👤 Student Name<br/>Fast Path"]
         SF -->|"match"| V
         SF -->|"no match"| T
         S --> T{"🧠 LLM<br/>Classifier"}
@@ -136,7 +137,7 @@ flowchart TD
         end
 
         subgraph RAG["📚 RAG Path"]
-            T -->|"single-person /<br/>general"| Y["🔎 Canonical + Query<br/>Expansion"]
+            T -->|"single-person /<br/>general"| Y["🔎 Hybrid Retriever"]
             X --> Y
             Y --> Z["⚡ Ensemble<br/>Retriever"]
             L -->|"weight: 0.6"| Z

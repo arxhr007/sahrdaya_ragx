@@ -56,6 +56,7 @@ CREATOR_BOOST_TERMS = [
 
 _query_correct_chain = None
 _query_map_chain = None
+QUERY_PIPELINE_DEBUG = os.environ.get("QUERY_PIPELINE_DEBUG", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def normalize_user_query(question: str) -> str:
@@ -101,11 +102,12 @@ _QUERY_EXPANSIONS = {
 }
 
 def expand_query(question: str) -> str:
-    """Expand abbreviated terms in the query for better embedding match."""
-    normalized_question = normalize_user_query(question)
-    expanded = normalized_question
+    """Expand terms for retrieval/routing; expects pre-normalized input."""
+    expanded = (question or "").strip()
+    if not expanded:
+        return ""
     for pattern, replacement in _QUERY_EXPANSIONS.items():
-        if re.search(pattern, normalized_question, re.IGNORECASE):
+        if re.search(pattern, expanded, re.IGNORECASE):
             expanded = re.sub(pattern, replacement, expanded, flags=re.IGNORECASE)
     return expanded
 
@@ -121,6 +123,64 @@ _DEPARTMENT_CANONICAL_MAP = {
     r"\bash\b|applied\s+science": "Applied Science and Humanities",
 }
 
+_FORMER_ROLE_CANONICAL_MAP = {
+    "principal": "Principals",
+    "vice principal": "Vice Principals",
+    "manager": "Managers",
+    "director": "Directors",
+    "executive director": "Executive Directors",
+    "finance officer": "Finance Officers",
+    "media director": "Media Directors",
+    "advisor": "Advisors",
+    "chairman": "Chairmen",
+    "college chairperson": "College Chairpersons",
+}
+
+
+def _looks_single_person_query(q: str) -> bool:
+    question = (q or "").lower().strip()
+    if not question:
+        return False
+    if re.search(r"\b(list|show all|all\s+|who are|how many|count)\b", question):
+        return False
+    patterns = [
+        r"^who\s+is\s+",
+        r"^tell\s+me\s+about\s+",
+        r"^details\s+about\s+",
+        r"^information\s+about\s+",
+        r"^info\s+about\s+",
+    ]
+    return any(re.search(p, question) for p in patterns)
+
+
+def _extract_interest_from_query(q_lower: str) -> str | None:
+    patterns = [
+        r"(?:students?|people)\s+(?:interested\s+in|into|who\s+like|who\s+likes)\s+([a-z0-9\-\s]{2,40})",
+        r"(?:interested\s+in|into|likes?|like)\s+([a-z0-9\-\s]{2,40})\s+(?:students?|people)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, q_lower)
+        if not m:
+            continue
+        value = re.sub(r"\s+", " ", m.group(1)).strip(" ?.!,")
+        if value:
+            return value
+    return None
+
+
+def _is_safe_mapped_query(original: str, mapped: str) -> bool:
+    """Guardrail to avoid over-rewrites that change single-person intent to bulk intent."""
+    o = (original or "").strip().lower()
+    m = (mapped or "").strip().lower()
+    if not m:
+        return False
+
+    if _looks_single_person_query(o):
+        if re.search(r"\b(list|show all|all\s+|who are|how many|count)\b", m):
+            return False
+
+    return True
+
 
 def _deterministic_query_map(question: str) -> str:
     """Map shorthand bulk queries to a canonical form before routing."""
@@ -129,7 +189,7 @@ def _deterministic_query_map(question: str) -> str:
         return ""
 
     q_lower = q.lower()
-    has_list_intent = bool(re.search(r"\b(list|show|give|who\s+are|all|members?)\b", q_lower))
+    has_list_intent = bool(re.search(r"\b(list|show|give|who\s+are|all|members?|staff|professors?)\b", q_lower))
     has_people_entity = bool(re.search(r"\b(faculty|faculties|professor|professors|teacher|teachers|staff|hods?|members?)\b", q_lower))
 
     detected_department = None
@@ -138,9 +198,20 @@ def _deterministic_query_map(question: str) -> str:
             detected_department = canonical
             break
 
-    # Example: "cse members list" -> "list all faculty in Computer Science Engineering"
-    if detected_department and has_list_intent and has_people_entity:
+    # Example: "cse members list" or "ece faculty" -> canonical faculty list format.
+    if detected_department and (has_list_intent or has_people_entity):
         return f"list all faculty in {detected_department}"
+
+    # Former-role list intent normalization.
+    for role_singular, role_plural in _FORMER_ROLE_CANONICAL_MAP.items():
+        role_pattern = rf"\bformer\s+{re.escape(role_singular)}s?\b"
+        if re.search(role_pattern, q_lower):
+            return f"list all former {role_plural}"
+
+    # Student-interest list normalization.
+    interest = _extract_interest_from_query(q_lower)
+    if interest:
+        return f"list all students interested in {interest}"
 
     return q
 
@@ -157,9 +228,26 @@ def map_query_to_preset(question: str) -> str:
         mapped = _query_map_chain.invoke({"question": baseline}).strip()
         mapped = mapped.strip("`\"'")
         mapped = re.sub(r"\s+", " ", mapped).strip()
-        return mapped or baseline
+        if not mapped:
+            return baseline
+        return mapped if _is_safe_mapped_query(baseline, mapped) else baseline
     except Exception:
         return baseline
+
+
+def canonicalize_query_pipeline(question: str) -> tuple[str, str, str]:
+    """Two-stage canonicalization contract: normalize -> map -> expand (+creator terms)."""
+    normalized = normalize_user_query(question)
+    mapped = map_query_to_preset(normalized)
+    expanded = expand_creator_query(expand_query(mapped))
+    if QUERY_PIPELINE_DEBUG:
+        print("[query-pipeline]", {
+            "original": (question or "").strip(),
+            "normalized": normalized,
+            "mapped": mapped,
+            "expanded": expanded,
+        })
+    return normalized, mapped, expanded
 
 
 # ============ LOAD PRE-PROCESSED DATA ============
@@ -401,6 +489,8 @@ Canonical examples:
 Rules:
 - Do not answer the question.
 - Do not add facts.
+- Never convert a single-person question (e.g., "who is X") into a list/count query.
+- Keep entity scope unchanged (faculty/student/former-people must stay the same).
 - Return only one rewritten query line.
 
 User query: {question}
@@ -824,9 +914,7 @@ def _is_bulk_entity_query(question: str) -> bool:
 
 def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str | None:
     """Ask the LLM if this question needs SQL. Returns SQL string or None."""
-    normalized_question = normalize_user_query(question)
-    mapped_question = map_query_to_preset(normalized_question)
-    expanded_question = expand_creator_query(expand_query(mapped_question))
+    normalized_question, _, expanded_question = canonicalize_query_pipeline(question)
 
     # Fast path: explicit single-person student lookups should not depend on RAG.
     direct_student_sql = _student_single_lookup_sql(normalized_question)
@@ -1070,9 +1158,7 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
 
 def retrieve_context(inputs):
     """Hybrid BM25 + Vector retrieval with cross-encoder reranking."""
-    question = normalize_user_query(inputs["question"])
-    mapped_question = map_query_to_preset(question)
-    expanded = expand_creator_query(expand_query(mapped_question))
+    _, mapped_question, expanded = canonicalize_query_pipeline(inputs["question"])
 
     is_list = is_list_query(mapped_question)
     creator_intent = is_creator_query(mapped_question)
@@ -1089,9 +1175,7 @@ def retrieve_context(inputs):
 
 def retrieve_with_metadata(question):
     """Retrieve docs with reranking and return (formatted_context, list_of_chunk_ids, num_docs)."""
-    question = normalize_user_query(question)
-    mapped_question = map_query_to_preset(question)
-    expanded = expand_creator_query(expand_query(mapped_question))
+    _, mapped_question, expanded = canonicalize_query_pipeline(question)
     is_list = is_list_query(mapped_question)
     creator_intent = is_creator_query(mapped_question)
     active = retriever_large if (is_list or creator_intent) else retriever
