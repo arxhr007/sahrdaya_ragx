@@ -6,7 +6,7 @@ logs/
 
 #test scripts
 scripts
-
+rip
 # Python
 __pycache__/
 *.pyc

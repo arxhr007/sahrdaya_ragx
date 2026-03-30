@@ -299,14 +299,6 @@ async def _process_chat(req: ChatRequest, session_id: str, client_ip: str = "unk
         turns = session_store.get_turns(session_id)
         history_text = _build_history_text(turns)
 
-        est_tokens = rate_manager.estimate_tokens(req.message + history_text)
-        allowed, retry_after = rate_manager.can_consume(est_tokens)
-        if not allowed:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Rate limited locally. Retry after ~{int(retry_after)} seconds.",
-            )
-
         sql_query, key_for_sql = await _classify_sql(req.message, history_text)
         mode = "rag"
         answer = ""
@@ -342,7 +334,6 @@ async def _process_chat(req: ChatRequest, session_id: str, client_ip: str = "unk
         prompt_tokens = rate_manager.estimate_tokens(req.message)
         response_tokens = rate_manager.estimate_tokens(answer)
         history_tokens = rate_manager.estimate_tokens(history_text)
-        rate_manager.consume(prompt_tokens + response_tokens + history_tokens + context_tokens)
 
         elapsed = time.time() - t0
         metadata = {
