@@ -1,8 +1,8 @@
 # Sahrdaya RAG X — College Chatbot Backend
 
-A Retrieval-Augmented Generation (RAG) chatbot backend for **Sahrdaya College of Engineering & Technology (SCET)**, Kodakara, Thrissur, Kerala. It answers questions about faculty, departments, admissions, placements, clubs, infrastructure, and more — all grounded in data scraped from the college website.
+A Retrieval-Augmented Generation (RAG) chatbot backend for **Sahrdaya College of Engineering & Technology (SCET)**, Kodakara, Thrissur, Kerala. It answers questions about faculty, departments, admissions, placements, clubs, infrastructure, and more — all grounded in data scraped from the college website. The runtime now supports SQL + Hybrid RAG, plus an additive GraphRAG content-graph route for structure/link relationship queries.
 
-> **📚 Want to learn how it works?** Check [WORKING.md](docs/WORKING.md) for a complete technical breakdown of the RAG pipeline: scraping, preprocessing, hybrid retrieval (BM25 + Vector), SQL routing, index caching, and answer generation.
+> **📚 Want to learn how it works?** Check [WORKING.md](docs/WORKING.md) for a complete technical breakdown of the pipeline: scraping, preprocessing, hybrid retrieval (BM25 + Vector), additive GraphRAG routing, SQL routing, index caching, and answer generation.
 >
 > **🚀 What's planned next?** See [FUTURE_ADDITIONS.md](docs/FUTURE_ADDITIONS.md) for the roadmap: streaming responses, Docker, web frontend, and more.
 >
@@ -13,7 +13,8 @@ A Retrieval-Augmented Generation (RAG) chatbot backend for **Sahrdaya College of
 - **Backend API**: FastAPI, Uvicorn, Pydantic
 - **LLM Orchestration**: LangChain, LangChain Core, LangChain Groq
 - **LLM Provider/Model**: Groq (`openai/gpt-oss-120b`)
-- **Retrieval**: Hybrid BM25 + FAISS Vector Search + Cross-Encoder Reranking
+- **Retrieval**: Hybrid BM25 + FAISS Vector Search + Cross-Encoder Reranking + GraphRAG (content graph)
+- **Graph Layer**: NetworkX + node-link JSON cache (`.index_cache/content_graph.json`)
 - **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2`
 - **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - **Data Processing**: Playwright, BeautifulSoup, NLTK, custom preprocessing pipeline
@@ -108,14 +109,18 @@ flowchart TD
         STING -->|"students + interests + links<br/>projects + socials"| K
     end
 
-    subgraph INDEX["📊 Dual Index Layer"]
+    subgraph INDEX["📊 Multi-Index Layer"]
         H -->|"TF-IDF<br/>tokenization"| L["🔍 BM25<br/>Retriever"]
         H -->|"all-MiniLM-L6-v2<br/>384-dim"| M["🧠 FAISS<br/>Vector Store"]
+        H -->|"chunk/category nodes"| G1["🕸️ Content Graph<br/>NetworkX"]
+        TJSON["🗂️ data/raw/sahrdaya_tracking.json"] -->|"page/url/chunk links"| G1
+
         L -.->|"pickle"| N[("💾 .index_cache/")]
         M -.->|"save_local()"| N
-        N -.->|"MD5<br/>validation"| O{{"♻️ Cache<br/>Hit?"}}
+        G1 -.->|"node-link JSON"| N
+        N -.->|"data hash"| O{{"♻️ Cache<br/>Hit?"}}
         O -->|"yes"| P["⚡ Fast Load<br/>~0.1s"]
-        O -->|"no"| Q["🔨 Rebuild<br/>~50s"]
+        O -->|"no"| Q["🔨 Rebuild<br/>indexes + graph"]
     end
 
     subgraph RUNTIME["❓ Query Runtime"]
@@ -136,16 +141,24 @@ flowchart TD
             V -->|"error"| X["🔄 Fallback<br/>to RAG"]
         end
 
-        subgraph RAG["📚 RAG Path"]
-            T -->|"single-person /<br/>general"| Y["🔎 Hybrid Retriever"]
-            X --> Y
+        subgraph RAG["📚 Retrieval Path (GraphRAG + Hybrid)"]
+            T -->|"single-person /<br/>general"| GH{"🧭 Graph Intent<br/>Heuristic?"}
+            X --> GH
+
+            GH -->|"yes"| GR["🕸️ GraphRAG<br/>Retriever"]
+            G1 --> GR
+            GR --> GE{"strong<br/>graph evidence?"}
+            GE -->|"yes"| AD["💬 Groq LLM<br/>Generation"]
+
+            GH -->|"no"| Y["🔎 Hybrid Retriever"]
+            GE -->|"no"| Y
             Y --> Z["⚡ Ensemble<br/>Retriever"]
             L -->|"weight: 0.6"| Z
             M -->|"weight: 0.4"| Z
             Z -->|"RRF<br/>fusion"| AA["📊 Top-25<br/>Candidates"]
             AA --> AB["🤖 Cross-Encoder<br/>ms-marco-MiniLM"]
             AB -->|"rerank"| AC["🎯 Top-10<br/>Relevant"]
-            AC --> AD["💬 Groq LLM<br/>Generation"]
+            AC --> AD
         end
     end
 
@@ -167,7 +180,32 @@ flowchart TD
     style DEPLOY fill:none,stroke:#7b61ff,stroke-width:2px
     style SQL fill:none,stroke:#ef4444,stroke-width:1px,stroke-dasharray: 5 5
     style RAG fill:none,stroke:#06b6d4,stroke-width:1px,stroke-dasharray: 5 5
+    style G1 fill:none,stroke:#0ea5e9,stroke-width:1px,stroke-dasharray: 4 4
+    style GR fill:none,stroke:#0ea5e9,stroke-width:1px,stroke-dasharray: 4 4
     style OUTPUT fill:none,stroke:#eab308,stroke-width:2px
+```
+
+### Query Routing Flow (SQL + GraphRAG + Hybrid RAG)
+
+```mermaid
+flowchart TD
+    U[User Query] --> N[Normalize + Canonicalize]
+    N --> S{Single-student fast match?}
+    S -->|yes| SQ[Direct Student SQL]
+    S -->|no| B{Bulk SQL intent?}
+    B -->|yes| SG[Generate SQL]
+    SG --> SX{SQL success with rows?}
+    SX -->|yes| A[Answer mode: sql]
+    SX -->|no| G
+    B -->|no| G{Graph intent heuristic?}
+    G -->|yes| GR[GraphRAG content graph retrieval]
+    GR --> GE{Strong graph evidence?}
+    GE -->|yes| L[Groq generation]
+    GE -->|no| H
+    G -->|no| H[Hybrid BM25 + FAISS + reranker]
+    H --> L
+    SQ --> A
+    L --> AR[Answer mode: graph_rag or rag]
 ```
 
 | File | Role |
@@ -183,7 +221,7 @@ flowchart TD
 | `data/students.csv` | Student source data (bio/biography, interests, social links, projects links; photo is optional) |
 | `data/sql/college.db` | Shared SQLite database for faculty, former people, students, and canonical interests |
 | `sql_smoke_test.py` | Quick DB validation (schema + row sanity checks after ingestion/parser changes) |
-| `rag_setup.py` | Builds FAISS + BM25 indexes, canonicalizes queries (deterministic + LLM mapping), routes SQL vs RAG, includes single-student fast lookup, and formats SQL output |
+| `rag_setup.py` | Builds FAISS + BM25 indexes, builds/caches content graph, canonicalizes queries, routes SQL vs GraphRAG vs hybrid RAG, includes single-student fast lookup, and formats SQL output |
 | `main.py` | Interactive CLI chatbot with stats, ASCII dashboard, and session analytics |
 | `api/` | FastAPI app split into `core`, `routes`, and `services` layers |
 | `api/services/chat_logger.py` | JSON Lines chat logging (success + error), per-IP files, rotating handler with retention |
@@ -227,7 +265,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Key packages: `langchain`, `langchain-community`, `langchain-classic`, `langchain-groq`, `langchain-huggingface`, `faiss-cpu`, `rank-bm25`, `nltk`, `groq`, `beautifulsoup4`, `playwright`.
+Key packages: `langchain`, `langchain-community`, `langchain-classic`, `langchain-groq`, `langchain-huggingface`, `faiss-cpu`, `rank-bm25`, `nltk`, `groq`, `beautifulsoup4`, `playwright`, `networkx`.
 
 ### 4. Download NLTK data (auto-handled, but can be done manually)
 
@@ -460,7 +498,7 @@ ragx-backend/
 ├── former_people_extractor.py # Former people parser/loader
 ├── student_db.py           # Student CSV loader + interest normalization
 ├── sql_smoke_test.py       # SQL ingestion sanity test
-├── rag_setup.py            # RAG engine (indexes, chains, SQL classifier)
+├── rag_setup.py            # Retrieval engine (hybrid RAG + GraphRAG + SQL routing)
 ├── main.py                 # CLI chatbot with session analytics
 ├── api/
 │   ├── app.py              # FastAPI app bootstrap + middleware wiring
@@ -490,11 +528,13 @@ ragx-backend/
 ├── tests/
 │   └── test_api.py         # API tests
 ├── requirements.txt        # Python dependencies
-├── .index_cache/           # Cached FAISS + BM25 indexes (auto-generated)
+├── .index_cache/           # Cached retrieval artifacts (auto-generated)
 │   ├── faiss/              # FAISS vector index
 │   ├── bm25.pkl            # BM25 retriever (k=8)
 │   ├── bm25_large.pkl      # BM25 retriever (k=50)
-│   └── data_hash.txt       # MD5 hash for cache invalidation
+│   ├── content_graph.json  # GraphRAG content graph cache (node-link JSON)
+│   ├── content_graph_hash.txt # Hash for graph cache invalidation
+│   └── data_hash.txt       # MD5 hash for FAISS/BM25 cache invalidation
 └── README.md               # Setup and usage guide
 ```
 
@@ -507,8 +547,10 @@ ragx-backend/
 | Chunk size | 700 chars target, 910 split threshold | `preprocess_data.py` | Sentence-aware splitting |
 | Former people | 10 role-based chunks + 1 summary | `preprocess_data.py` | Structured per-role parsing for accurate retrieval |
 | BM25:Vector weights | 0.6:0.4 | `rag_setup.py` | BM25 weighted higher for keyword queries |
+| GraphRAG cache | `.index_cache/content_graph.json` | `rag_setup.py` | Built from processed chunks + tracking graph for structure/link queries |
 | Max context | 22,000 chars (~6K tokens) | `rag_setup.py` | Truncates retrieved chunks to fit |
 | SQL history limit | 1,500 chars | `rag_setup.py` | Caps history sent to SQL classifier |
+| Retrieval modes | `sql` / `rag` / `graph_rag` | `api/routes/chat.py` | Returned in chat metadata for route verification |
 | API host/port | `0.0.0.0:8000` | `.env` | Controlled by `API_HOST`, `API_PORT` |
 | API concurrency | `4` | `.env` | `MAX_CONCURRENT_REQUESTS` for load control |
 | Queue wait timeout | `20s` | `.env` | `QUEUE_WAIT_SECONDS` before busy response |

@@ -316,7 +316,11 @@ async def _process_chat(req: ChatRequest, session_id: str, client_ip: str = "unk
                     mode = "sql"
 
         if not answer:
-            context_str, chunk_ids, num_docs = rag_setup.retrieve_with_metadata(req.message)
+            context_str, chunk_ids, num_docs, retrieval_mode = rag_setup.retrieve_with_metadata(
+                req.message,
+                return_mode=True,
+            )
+            mode = retrieval_mode
             context_tokens = rate_manager.estimate_tokens(context_str)
             answer, key_used = await _answer_rag(req.message, history_text, context_str)
             if _query_likely_needs_links(req.message) and not URL_PATTERN.search(answer or ""):

@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 from operator import itemgetter
 from functools import lru_cache
+from collections import defaultdict
 import json
 import os
 import re
@@ -19,6 +20,13 @@ import pickle
 import time
 import sqlite3
 from sentence_transformers import CrossEncoder
+
+try:
+    import networkx as nx
+    from networkx.readwrite import json_graph
+except Exception:
+    nx = None
+    json_graph = None
 
 from sql_extractors.student_db import ensure_student_data
 
@@ -51,6 +59,31 @@ CREATOR_BOOST_TERMS = [
     "mishal shanavas",
     "mathew geejo",
 ]
+
+GRAPH_ROUTE_PATTERN = re.compile(
+    r"\b(graph|relationship|related|connect(?:ed|ion)?|link(?:ed|s)?|path|structure|"
+    r"site\s*map|sitemap|navigation|which\s+page|where\s+can\s+i\s+find|"
+    r"under\s+which|category|section|source\s+page|document\s+link)\b",
+    re.IGNORECASE,
+)
+
+GRAPH_STOPWORDS = {
+    "a", "an", "and", "the", "for", "with", "from", "that", "this", "what", "when", "where",
+    "which", "show", "list", "give", "need", "want", "have", "has", "all", "about", "your", "their",
+    "there", "into", "data", "details", "please", "can", "you", "how", "find", "page", "pages",
+}
+
+GRAPH_ROUTE_PRINT = os.environ.get("GRAPH_ROUTE_PRINT", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _print_graphrag_used(question: str, num_docs: int) -> None:
+    """Print a clear marker when GraphRAG route is selected (for testing)."""
+    if not GRAPH_ROUTE_PRINT:
+        return
+    q = re.sub(r"\s+", " ", (question or "")).strip()
+    if len(q) > 140:
+        q = q[:137] + "..."
+    print(f"[route] graph_rag used | docs={num_docs} | query=\"{q}\"")
 
 # ============ QUERY EXPANSION ============
 
@@ -309,6 +342,25 @@ docs.append(
     )
 )
 
+DOC_BY_SUBCHUNK: dict[str, Document] = {}
+DOCS_BY_PARENT: dict[str, list[Document]] = defaultdict(list)
+
+
+def _build_doc_lookups() -> None:
+    DOC_BY_SUBCHUNK.clear()
+    DOCS_BY_PARENT.clear()
+    for doc in docs:
+        md = doc.metadata or {}
+        sub = str(md.get("sub_chunk", md.get("chunk_id", ""))).strip()
+        parent = str(md.get("chunk_id", sub)).strip()
+        if not sub:
+            continue
+        DOC_BY_SUBCHUNK[sub] = doc
+        DOCS_BY_PARENT[parent].append(doc)
+
+
+_build_doc_lookups()
+
 # ============ RETRIEVERS ============
 
 # Embeddings (local, no API key needed)
@@ -320,6 +372,10 @@ FAISS_DIR        = os.path.join(CACHE_DIR, "faiss")
 BM25_CACHE       = os.path.join(CACHE_DIR, "bm25.pkl")
 BM25_LARGE_CACHE = os.path.join(CACHE_DIR, "bm25_large.pkl")
 HASH_FILE        = os.path.join(CACHE_DIR, "data_hash.txt")
+TRACKING_FILE    = "data/raw/sahrdaya_tracking.json"
+GRAPH_CACHE      = os.path.join(CACHE_DIR, "content_graph.json")
+GRAPH_HASH_FILE  = os.path.join(CACHE_DIR, "content_graph_hash.txt")
+GRAPH_SCHEMA_V1  = "content_graph_v1"
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -344,6 +400,167 @@ def _cache_is_valid() -> bool:
 def _save_hash():
     with open(HASH_FILE, "w") as f:
         f.write(_data_hash())
+
+
+def _file_hash(path: str) -> str:
+    if not os.path.exists(path):
+        return "missing"
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _graph_data_hash() -> str:
+    h = hashlib.md5()
+    h.update(_file_hash(CLEANED_FILE).encode("utf-8"))
+    h.update(_file_hash(TRACKING_FILE).encode("utf-8"))
+    h.update(GRAPH_SCHEMA_V1.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _graph_cache_is_valid() -> bool:
+    if nx is None or json_graph is None:
+        return False
+    if not all(os.path.exists(p) for p in [GRAPH_CACHE, GRAPH_HASH_FILE]):
+        return False
+    with open(GRAPH_HASH_FILE, "r", encoding="utf-8") as f:
+        return f.read().strip() == _graph_data_hash()
+
+
+def _save_graph_hash() -> None:
+    with open(GRAPH_HASH_FILE, "w", encoding="utf-8") as f:
+        f.write(_graph_data_hash())
+
+
+def _extract_urls_from_text(text: str) -> list[str]:
+    urls = []
+    seen = set()
+    for raw in URL_PATTERN.findall(text or ""):
+        u = raw.rstrip(".,;:)")
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    return urls
+
+
+def _load_tracking_pages() -> dict:
+    if not os.path.exists(TRACKING_FILE):
+        return {}
+    try:
+        with open(TRACKING_FILE, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        return obj.get("urls", {}) if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _build_content_graph():
+    if nx is None:
+        return None
+
+    graph = nx.MultiDiGraph()
+
+    for doc in docs:
+        md = doc.metadata or {}
+        sub = str(md.get("sub_chunk", md.get("chunk_id", ""))).strip()
+        if not sub:
+            continue
+
+        parent = str(md.get("chunk_id", sub)).strip()
+        categories = str(md.get("categories", "general")).split(",")
+        categories = [c.strip() for c in categories if c.strip()]
+        chunk_node = f"chunk:{sub}"
+
+        graph.add_node(
+            chunk_node,
+            node_type="chunk",
+            chunk_id=sub,
+            parent_chunk=parent,
+            categories=",".join(categories),
+            text=doc.page_content,
+        )
+
+        for category in categories:
+            cat_node = f"category:{category}"
+            graph.add_node(cat_node, node_type="category", name=category)
+            graph.add_edge(chunk_node, cat_node, rel="tagged_as")
+            graph.add_edge(cat_node, chunk_node, rel="has_chunk")
+
+        for url in _extract_urls_from_text(doc.page_content):
+            url_node = f"url:{url}"
+            graph.add_node(url_node, node_type="url", url=url)
+            graph.add_edge(chunk_node, url_node, rel="mentions_url")
+
+    tracking_pages = _load_tracking_pages()
+    for page_url, payload in tracking_pages.items():
+        page_node = f"page:{page_url}"
+        title = str(payload.get("title", ""))
+        description = str(payload.get("description", ""))
+        graph.add_node(
+            page_node,
+            node_type="page",
+            url=page_url,
+            title=title,
+            description=description,
+        )
+
+        for parent_id in payload.get("chunk_ids", []):
+            for doc in DOCS_BY_PARENT.get(str(parent_id), []):
+                sub = str((doc.metadata or {}).get("sub_chunk", "")).strip()
+                if not sub:
+                    continue
+                chunk_node = f"chunk:{sub}"
+                if graph.has_node(chunk_node):
+                    graph.add_edge(page_node, chunk_node, rel="contains_chunk")
+                    graph.add_edge(chunk_node, page_node, rel="in_page")
+
+        for document_link in payload.get("document_links", []):
+            if isinstance(document_link, dict):
+                url = str(document_link.get("url", "")).strip()
+                label = str(document_link.get("purpose", document_link.get("label", ""))).strip()
+            else:
+                url = str(document_link).strip()
+                label = ""
+
+            if not url:
+                continue
+
+            url_node = f"url:{url}"
+            graph.add_node(url_node, node_type="url", url=url, label=label)
+            graph.add_edge(page_node, url_node, rel="has_document_link")
+
+    return graph
+
+
+def _load_or_build_content_graph():
+    if nx is None or json_graph is None:
+        print("[*] GraphRAG disabled (networkx not available)")
+        return None
+
+    if _graph_cache_is_valid():
+        try:
+            print("[*] Loading cached content graph...")
+            with open(GRAPH_CACHE, "r", encoding="utf-8") as f:
+                graph_data = json.load(f)
+            graph = json_graph.node_link_graph(graph_data)
+            print(f"[*] Content graph loaded ({graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges)")
+            return graph
+        except Exception as exc:
+            print(f"[!] Failed to load graph cache, rebuilding: {exc}")
+
+    print("[*] Building content graph for GraphRAG...")
+    graph = _build_content_graph()
+    try:
+        with open(GRAPH_CACHE, "w", encoding="utf-8") as f:
+            json.dump(json_graph.node_link_data(graph), f, ensure_ascii=False)
+        _save_graph_hash()
+    except Exception as exc:
+        print(f"[!] Failed to persist graph cache: {exc}")
+
+    print(f"[*] Content graph ready ({graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges)")
+    return graph
 
 # Custom preprocessing: lowercase + split so that token matching is case-insensitive
 def _bm25_preprocess(text: str) -> list[str]:
@@ -383,6 +600,8 @@ else:
 
 _t1 = time.time()
 print(f"[*] Indexes ready in {_t1 - _t0:.1f}s")
+
+CONTENT_GRAPH = _load_or_build_content_graph()
 
 # Vector retrievers with MMR for diversity
 vector_retriever = vectorstore.as_retriever(
@@ -1161,25 +1380,136 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
 # BM25 handles keyword/exact matching natively, vector handles semantics.
 # EnsembleRetriever combines both — no manual keyword maps needed.
 
+
+def _tokenize_graph_query(question: str) -> list[str]:
+    q = (question or "").lower()
+    tokens = re.findall(r"[a-z0-9]{2,}", q)
+    return [t for t in tokens if t not in GRAPH_STOPWORDS]
+
+
+def _graph_link_intent(question: str) -> bool:
+    q = (question or "").lower()
+    keys = ["link", "url", "download", "pdf", "document", "source"]
+    return any(k in q for k in keys)
+
+
+def _is_graph_query(question: str) -> bool:
+    q = normalize_user_query(question)
+    if not q:
+        return False
+    if is_creator_query(q):
+        return False
+    return bool(GRAPH_ROUTE_PATTERN.search(q))
+
+
+def _seed_graph_chunks_from_query(tokens: list[str]) -> set[str]:
+    if not CONTENT_GRAPH or not tokens:
+        return set()
+
+    seeds: set[str] = set()
+    for node, data in CONTENT_GRAPH.nodes(data=True):
+        node_type = data.get("node_type")
+        if node_type == "category":
+            cat = str(data.get("name", "")).lower()
+            if any(tok in cat for tok in tokens):
+                for _, dst, edge_data in CONTENT_GRAPH.out_edges(node, data=True):
+                    if edge_data.get("rel") != "has_chunk":
+                        continue
+                    dst_data = CONTENT_GRAPH.nodes.get(dst, {})
+                    if dst_data.get("node_type") == "chunk":
+                        cid = str(dst_data.get("chunk_id", "")).strip()
+                        if cid:
+                            seeds.add(cid)
+
+        if node_type == "page":
+            haystack = f"{data.get('title', '')} {data.get('description', '')} {data.get('url', '')}".lower()
+            if any(tok in haystack for tok in tokens):
+                for _, dst, edge_data in CONTENT_GRAPH.out_edges(node, data=True):
+                    if edge_data.get("rel") != "contains_chunk":
+                        continue
+                    dst_data = CONTENT_GRAPH.nodes.get(dst, {})
+                    if dst_data.get("node_type") == "chunk":
+                        cid = str(dst_data.get("chunk_id", "")).strip()
+                        if cid:
+                            seeds.add(cid)
+
+    return seeds
+
+
+def _score_graph_chunk(question_tokens: list[str], doc: Document, seed_chunks: set[str]) -> int:
+    md = doc.metadata or {}
+    sub = str(md.get("sub_chunk", md.get("chunk_id", ""))).strip()
+    text = (doc.page_content or "").lower()
+    cats = str(md.get("categories", "")).lower()
+    score = 0
+
+    for tok in question_tokens:
+        if tok in text:
+            score += 2
+        if tok in cats:
+            score += 2
+
+    if sub and sub in seed_chunks:
+        score += 6
+
+    # Link-intent prompts benefit from chunks that explicitly contain URLs.
+    if _graph_link_intent(" ".join(question_tokens)) and URL_PATTERN.search(doc.page_content or ""):
+        score += 3
+
+    return score
+
+
+def retrieve_with_metadata_graph(question: str) -> tuple[str, list[str], int]:
+    """Return graph-informed context for relationship/structure style questions."""
+    if not CONTENT_GRAPH:
+        return "", [], 0
+
+    normalized = normalize_user_query(question)
+    tokens = _tokenize_graph_query(normalized)
+    if not tokens:
+        return "", [], 0
+
+    seed_chunks = _seed_graph_chunks_from_query(tokens)
+    scored_docs: list[tuple[int, Document]] = []
+    for doc in docs:
+        md = doc.metadata or {}
+        sub = str(md.get("sub_chunk", md.get("chunk_id", ""))).strip()
+        if sub == "canonical_creators":
+            continue
+        score = _score_graph_chunk(tokens, doc, seed_chunks)
+        if score > 0:
+            scored_docs.append((score, doc))
+
+    if not scored_docs:
+        return "", [], 0
+
+    scored_docs.sort(key=lambda item: item[0], reverse=True)
+    top_docs = [d for _, d in scored_docs[:16]]
+
+    chunk_ids = [
+        str((d.metadata or {}).get("sub_chunk", (d.metadata or {}).get("chunk_id", "?")))
+        for d in top_docs
+    ]
+    context_str = format_docs(top_docs)
+    return context_str, chunk_ids, len(top_docs)
+
 def retrieve_context(inputs):
-    """Hybrid BM25 + Vector retrieval with cross-encoder reranking."""
-    _, mapped_question, expanded = canonicalize_query_pipeline(inputs["question"])
-
-    is_list = is_list_query(mapped_question)
-    creator_intent = is_creator_query(mapped_question)
-    active = retriever_large if (is_list or creator_intent) else retriever
-    # Over-retrieve candidates for the reranker to score
-    candidate_k = 80 if creator_intent else (60 if is_list else 25)
-    final_k = 20 if creator_intent else (35 if is_list else 10)
-
-    docs = active.invoke(expanded)
-    candidates = docs[:candidate_k]
-    reranked = rerank_docs_with_creator_boost(mapped_question, candidates, top_k=final_k, creator_intent=creator_intent)
-    return format_docs(reranked)
+    """Route retrieval (GraphRAG or hybrid) and return context string."""
+    context, _, _, _ = retrieve_with_metadata(inputs["question"], return_mode=True)
+    return context
 
 
-def retrieve_with_metadata(question):
-    """Retrieve docs with reranking and return (formatted_context, list_of_chunk_ids, num_docs)."""
+def retrieve_with_metadata(question: str, return_mode: bool = False):
+    """Route retrieval and return context/chunks/docs with optional route mode."""
+    if _is_graph_query(question):
+        graph_context, graph_chunks, graph_count = retrieve_with_metadata_graph(question)
+        if graph_count > 0:
+            _print_graphrag_used(question, graph_count)
+            if return_mode:
+                return graph_context, graph_chunks, graph_count, "graph_rag"
+            return graph_context, graph_chunks, graph_count
+
+    """Fallback path: hybrid BM25 + vector + reranker."""
     _, mapped_question, expanded = canonicalize_query_pipeline(question)
     is_list = is_list_query(mapped_question)
     creator_intent = is_creator_query(mapped_question)
@@ -1197,6 +1527,8 @@ def retrieve_with_metadata(question):
         chunk_ids.append(cid)
 
     context_str = format_docs(reranked)
+    if return_mode:
+        return context_str, chunk_ids, len(reranked), "rag"
     return context_str, chunk_ids, len(reranked)
 
 

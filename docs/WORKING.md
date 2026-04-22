@@ -1,6 +1,6 @@
 # How the RAG Pipeline Works
 
-This document explains the retrieval-augmented generation (RAG) architecture, the methods used at each stage, and why they were chosen. If you're new to RAG, this will walk you through every step from raw website data to a grounded answer.
+This document explains the retrieval architecture used in this project, including hybrid RAG, additive GraphRAG routing, and SQL routing. If you're new to RAG, this will walk you through every step from raw website data to a grounded answer.
 
 ---
 
@@ -51,9 +51,34 @@ flowchart LR
 | 1. Scrape | Crawl the college website, extract text, capture popup PDF links | `scraper.py` |
 | 2. Preprocess | Clean, categorise, chunk, inject aliases, structure former people | `preprocess_data.py` |
 | 3. Structured DB | Build shared SQLite data: faculty + former people + students + interests | `sql_db_setup.py`, `student_db.py` |
-| 4. Index | Build BM25 + FAISS search indexes | `rag_setup.py` |
-| 5. Route | Typo correction + canonical query mapping + student-name fast path + LLM classification for SQL (bulk faculty/former/students) vs RAG | `rag_setup.py` |
+| 4. Index | Build BM25 + FAISS indexes and content-graph cache artifacts | `rag_setup.py` |
+| 5. Route | Typo correction + canonical query mapping + student-name fast path + SQL classifier + GraphRAG heuristic routing | `rag_setup.py` |
 | 6. Generate | SQL formatted output for entity queries, LLM answer for general queries | `rag_setup.py` |
+
+### Current Query Routing (SQL + GraphRAG + Hybrid RAG)
+
+```mermaid
+flowchart TD
+  U[User Query] --> N[Normalize + Canonicalize]
+  N --> SF{Single-student fast path?}
+  SF -->|yes| SQ[Direct Student SQL]
+  SF -->|no| BI{Bulk SQL intent?}
+  BI -->|yes| SG[Schema-aware SQL generation]
+  SG --> SX{SQL success with rows?}
+  SX -->|yes| SA[Return SQL result]
+  SX -->|no| GH
+  BI -->|no| GH{Graph intent heuristic?}
+  GH -->|yes| GR[GraphRAG content graph retrieval]
+  GR --> GE{Graph evidence strong?}
+  GE -->|yes| GL[LLM answer from graph context]
+  GE -->|no| HR
+  GH -->|no| HR[Hybrid BM25 + FAISS + reranker]
+  HR --> RL[LLM answer from hybrid context]
+  SQ --> SA
+  GL --> OUT[Final Answer]
+  RL --> OUT
+  SA --> OUT
+```
 
 ---
 
@@ -426,7 +451,7 @@ This means whenever you re-run `preprocess_data.py` and the output changes, the 
 
 ## Stage 4: Hybrid Retrieval
 
-This is the core of the system — how we combine both indexes to find the best chunks for any query.
+This is the core non-graph retrieval path (and the fallback path when GraphRAG evidence is weak) — how we combine both indexes to find the best chunks for any query.
 
 ```mermaid
 flowchart TD
@@ -1121,6 +1146,8 @@ flowchart TD
 | EnsembleRetriever (RRF) | Retrieval | Fuses BM25 + Vector rankings |
 | MMR | Retrieval | Diversifies vector search results |
 | Cross-Encoder Reranker | Retrieval | Rescores (query, doc) pairs jointly for precision; `ms-marco-MiniLM-L-6-v2` |
+| GraphRAG Content Graph (NetworkX) | Retrieval | Builds page/chunk/category/url graph and routes structure/link-intent queries through graph evidence |
+| Graph Heuristic Router | Retrieval | Selects `graph_rag` only for graph-suitable queries; otherwise falls back to hybrid retrieval |
 | Query Expansion (regex) | Retrieval | Expands abbreviations before search |
 | Search Alias Injection | Preprocessing | Enables matching concatenated name variants |
 | Category Tagging | Preprocessing | Adds searchable category keywords to chunks |

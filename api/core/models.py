@@ -20,7 +20,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatMetadata(BaseModel):
-    mode: Literal["sql", "rag"]
+    mode: Literal["sql", "rag", "graph_rag"]
     response_time: float
     prompt_tokens: int
     response_tokens: int

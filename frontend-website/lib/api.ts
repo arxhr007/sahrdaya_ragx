@@ -84,7 +84,7 @@ export interface ChatResponse {
   session_id: string
   answer: string
   metadata?: {
-    mode?: string
+    mode?: "sql" | "rag" | "graph_rag"
     response_time?: number
     prompt_tokens?: number
     response_tokens?: number
