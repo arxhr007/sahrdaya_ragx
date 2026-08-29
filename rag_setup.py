@@ -1682,5 +1682,8 @@ qa_chain_with_context = (
     | StrOutputParser()
 )
 
-# Store for conversation history
+# Store for conversation history.
+# Owned by the CLI (main.py) only -- it is a plain unlocked module global shared by
+# every importer, so it has no per-user scoping. API code must NOT touch this; the
+# FastAPI layer keeps per-session history in api/services/session_store.SessionStore.
 chat_history = []

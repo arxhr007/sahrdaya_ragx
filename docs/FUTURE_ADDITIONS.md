@@ -59,7 +59,7 @@ Things to fix, improve, and add to the RAG pipeline.
 
 - ✅ (DONE) **Docker container + compose deployment** — `Dockerfile`, `docker-compose.yml`, and `docker-compose.nginx.yml` support single-container or Nginx-balanced multi-replica deployment
 - 🟡 (Partial) **Logging** — *Partially done*: API-side structured JSONL logging is implemented via `api/services/chat_logger.py` (events + per-IP logs, including error logging). CLI/session analytics are also available via `/stats` and `/graph`. Missing: centralized cross-instance aggregation and long-term analytics storage
-- 🟡 (Partial) **Rate limiting** — *Partially done*: dual-layer limits are implemented for testing (Nginx edge + app-level sliding window, with `/api/quota` status). Remaining work: production-grade distributed limiter with persistent shared backend and finalized policy
+- 🟡 (Partial) **Rate limiting** — *Partially done*: the app-level sliding window and `/api/quota` were removed (see `docs/LIMITER_CONTEXT.md`). What remains is the Nginx edge `limit_req` cap, the `load_control` concurrency semaphore, and reactive Groq 429 handling in `key_pool`. Remaining work: production-grade distributed limiter with persistent shared backend and finalized policy
 - 🔶 (Pending) **Caching** — Cache responses for identical or near-identical queries. Many users ask the same questions ("who is the principal", "admission process")
 - 🔶 (Pending) **Scheduled re-scraping** — Auto-scrape the website on a schedule (weekly/monthly) and reprocess data to keep the chatbot up to date
 - ✅ (DONE) **API server** — FastAPI service is live with chat, streaming, sessions, health/readiness/load/limits/quota endpoints

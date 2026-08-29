@@ -100,52 +100,10 @@ export interface SessionResponse {
   session_id: string
 }
 
-export interface UpdateRequest {
-  url: string
-  output_prefix?: string
-  use_playwright?: boolean
-  max_pages?: number
-}
-
-export interface UpdateResponse {
-  status: string
-  message: string
-  url: string
-  pages_scraped?: number
-  chunks_created?: number
-}
-
-export interface SiteInfo {
-  url: string
-  title: string
-  description: string
-  content_hash: string
-  chunk_count: number
-  word_count: number
-  char_count: number
-  scraped_at: string
-}
-
-export interface DashboardResponse {
-  total_sites: number
-  total_chunks: number
-  sites: SiteInfo[]
-  last_updated?: string
-}
-
 export interface HealthResponse {
   status: string
   rag_loaded?: boolean
   timestamp: string
-}
-
-export interface Session {
-  session_id: string
-  message_count: number
-}
-
-export interface SessionsResponse {
-  sessions: Session[]
 }
 
 // API Functions
@@ -177,51 +135,6 @@ export async function sendMessage(request: ChatRequest): Promise<ChatResponse> {
   return res.json()
 }
 
-export async function updateData(request: UpdateRequest): Promise<UpdateResponse> {
-  const res = await apiFetch(`${API_BASE_URL}/update`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  })
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: "Unknown error" }))
-    throw new Error(error.detail || "Failed to update data")
-  }
-  return res.json()
-}
-
-export async function getDashboard(): Promise<DashboardResponse> {
-  const res = await apiFetch(`${API_BASE_URL}/dashboard`)
-  if (!res.ok) throw new Error("Failed to fetch dashboard")
-  return res.json()
-}
-
-export async function getSiteDetails(url: string): Promise<SiteInfo & { chunk_previews: Array<{ id: string; preview: string; char_count: number }> }> {
-  const res = await apiFetch(`${API_BASE_URL}/dashboard/${encodeURIComponent(url)}`)
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: "Unknown error" }))
-    throw new Error(error.detail || "Failed to fetch site details")
-  }
-  return res.json()
-}
-
-export async function deleteSite(url: string): Promise<{ status: string; message: string }> {
-  const res = await apiFetch(`${API_BASE_URL}/dashboard/${encodeURIComponent(url)}`, {
-    method: "DELETE",
-  })
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: "Unknown error" }))
-    throw new Error(error.detail || "Failed to delete site")
-  }
-  return res.json()
-}
-
-export async function getSessions(): Promise<SessionsResponse> {
-  const res = await apiFetch(`${API_BASE_URL}/sessions`)
-  if (!res.ok) throw new Error("Failed to fetch sessions")
-  return res.json()
-}
-
 export async function clearSession(sessionId: string): Promise<{ status: string; message: string }> {
   const res = await apiFetch(`${API_BASE_URL}/api/sessions/${sessionId}`, {
     method: "DELETE",
@@ -232,13 +145,5 @@ export async function clearSession(sessionId: string): Promise<{ status: string;
   if (!res.ok) {
     throw await parseError(res, "Failed to clear session")
   }
-  return res.json()
-}
-
-export async function reloadRag(): Promise<{ status: string; message: string }> {
-  const res = await apiFetch(`${API_BASE_URL}/reload`, {
-    method: "POST",
-  })
-  if (!res.ok) throw new Error("Failed to reload RAG")
   return res.json()
 }

@@ -49,14 +49,12 @@ class LoadResponse(BaseModel):
 
 
 class LimitsResponse(BaseModel):
-    rpm_limit: int
-    tpm_limit: int
-    rpd_limit: int
-    tpd_limit: int
-    minute_requests_used: int
-    minute_tokens_used: int
-    day_requests_used: int
-    day_tokens_used: int
-    reset_seconds_minute: float
-    reset_seconds_day: float
+    # What genuinely limits traffic right now.
+    enforcement: list[str]
+    # Configured Groq ceilings. Reported for reference only -- this app does not
+    # meter against them; Groq enforces them itself by returning 429.
+    advisory_groq_limits: dict[str, int]
+    inflight_requests: int
+    max_concurrent: int
+    saturated: bool
     keys: list[dict[str, Any]]

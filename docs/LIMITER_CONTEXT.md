@@ -4,6 +4,39 @@ This document explains the temporary chat limiter added for public testing, and 
 
 ---
 
+## 🔴 CURRENT STATUS — READ THIS FIRST
+
+**Layer 1 (the app-level limiter) has been REMOVED. Layer 2 (Nginx) is still live.**
+
+What no longer exists, despite being described below:
+
+| Described here | Actual state |
+| --- | --- |
+| `api/services/client_window_limiter.py` | Deleted |
+| `GET /api/quota` | Never existed in current code; no quota endpoint is served |
+| `CHAT_WINDOW_MAX_REQUESTS` / `CHAT_WINDOW_SECONDS` env vars | Removed from `.env.example` and `Settings` |
+| `QuotaScopeStatus` / `QuotaStatusResponse` models | Removed from `api/core/models.py` |
+| Frontend countdown lock / disabled input | Not present; `chat-interface.tsx` renders a static 429 message |
+| `api/services/rate_limit_manager.py` RPM/TPM/RPD/TPD metering | Enforcement stripped in `51f0875`; module later deleted entirely |
+
+Removal happened across `16fc43e` (chat window limiter and its config) and `51f0875`
+(rate-limiting checks in chat processing). What still throttles traffic today:
+
+1. **Nginx `limit_req`** — `deploy/nginx-docker.conf`, 1r/m with `burst=4` on `/api/chat`
+   and `/api/chat/stream`. Docker-Nginx deployment only. Section "2. Edge/global limiter"
+   below is still accurate.
+2. **`load_control`** — an `asyncio.Semaphore` capping concurrent chat requests, returning
+   503 once `QUEUE_WAIT_SECONDS` is exceeded.
+3. **`key_pool`** — reactive: cools a Groq key down and fails over when Groq itself
+   returns 429.
+
+`GROQ_RPM/TPM/RPD/TPD_LIMIT` remain in settings but are **advisory** — reported by
+`GET /api/limits`, never metered against.
+
+Everything below this line is retained as the historical record of what was built and why.
+
+---
+
 ## ⚠️ TESTING NOTICE
 
 **This rate limiter is TEMPORARY for public testing only and will be completely removed in production.**
@@ -26,7 +59,7 @@ When rate limited, you'll see:
 
 Two limiter layers currently exist:
 
-1. App-level limiter (FastAPI, in-memory):
+1. App-level limiter (FastAPI, in-memory) — **REMOVED, see status section above**:
 - Cap: 5 chat requests per 5 minutes
 - Keys checked: `ip:<client_ip>` and `session:<session_id>`
 - Applied on both endpoints:
@@ -37,7 +70,7 @@ Two limiter layers currently exist:
 - Returns `HTTP 429` with retry seconds
 - Logs limiter rejections as JSONL `chat_error` with `error_type=client_window_limit`
 
-2. Edge/global limiter (Nginx):
+2. Edge/global limiter (Nginx) — **still live**:
 - Added because app-level memory is per replica and can be bypassed across 3 containers
 - Enforced at Nginx before upstream routing
 - Configured on:

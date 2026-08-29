@@ -21,20 +21,14 @@ from api.core.settings import get_settings
 from api.services.key_pool import KeyPool
 from api.services.chat_logger import ChatLogger
 from api.services.load_control import LoadController
-from api.services.rate_limit_manager import RateLimitManager
 from api.services.session_store import SessionStore
+from api.services.token_estimator import estimate_tokens
 
 
 settings = get_settings()
 router = APIRouter(prefix="/api", tags=["chat"])
 
 session_store = SessionStore(ttl_seconds=settings.session_ttl_seconds)
-rate_manager = RateLimitManager(
-    rpm=settings.groq_rpm_limit,
-    tpm=settings.groq_tpm_limit,
-    rpd=settings.groq_rpd_limit,
-    tpd=settings.groq_tpd_limit,
-)
 key_pool = KeyPool(
     keys=settings.parsed_keys(),
     failure_threshold=settings.key_failure_threshold,
@@ -321,7 +315,7 @@ async def _process_chat(req: ChatRequest, session_id: str, client_ip: str = "unk
                 return_mode=True,
             )
             mode = retrieval_mode
-            context_tokens = rate_manager.estimate_tokens(context_str)
+            context_tokens = estimate_tokens(context_str)
             answer, key_used = await _answer_rag(req.message, history_text, context_str)
             if _query_likely_needs_links(req.message) and not URL_PATTERN.search(answer or ""):
                 fallback_urls = _extract_urls(context_str, limit=6)
@@ -335,9 +329,9 @@ async def _process_chat(req: ChatRequest, session_id: str, client_ip: str = "unk
         session_store.append_turn(session_id, "user", req.message)
         session_store.append_turn(session_id, "assistant", answer)
 
-        prompt_tokens = rate_manager.estimate_tokens(req.message)
-        response_tokens = rate_manager.estimate_tokens(answer)
-        history_tokens = rate_manager.estimate_tokens(history_text)
+        prompt_tokens = estimate_tokens(req.message)
+        response_tokens = estimate_tokens(answer)
+        history_tokens = estimate_tokens(history_text)
 
         elapsed = time.time() - t0
         metadata = {
@@ -393,9 +387,31 @@ async def load() -> LoadResponse:
 
 @router.get("/limits", response_model=LimitsResponse)
 async def limits() -> LimitsResponse:
-    snap = rate_manager.snapshot()
-    snap["keys"] = key_pool.snapshot()
-    return LimitsResponse(**snap)
+    """Report what actually throttles traffic, and what is merely configured.
+
+    The GROQ_* limits are advisory: this app does not meter requests or tokens
+    against them. Enforcement is concurrency, reactive 429 handling, and Nginx.
+    """
+    load_snap = await load_control.snapshot()
+    return LimitsResponse(
+        enforcement=[
+            f"load_control: at most {settings.max_concurrent_requests} concurrent chat "
+            f"requests, {settings.queue_wait_seconds}s queue wait then 503",
+            "key_pool: reactive cooldown + failover when Groq returns 429",
+            "nginx: per-IP limit_req on /api/chat and /api/chat/stream "
+            "(nginx deployment only)",
+        ],
+        advisory_groq_limits={
+            "rpm": settings.groq_rpm_limit,
+            "tpm": settings.groq_tpm_limit,
+            "rpd": settings.groq_rpd_limit,
+            "tpd": settings.groq_tpd_limit,
+        },
+        inflight_requests=load_snap["inflight_requests"],
+        max_concurrent=load_snap["max_concurrent"],
+        saturated=load_snap["saturated"],
+        keys=key_pool.snapshot(),
+    )
 
 
 @router.post("/sessions", response_model=SessionCreateResponse)
@@ -494,15 +510,15 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     async def events():
         payload = {"session_id": response.session_id}
-        yield f"event: started\\ndata: {json.dumps(payload)}\\n\\n"
+        yield f"event: started\ndata: {json.dumps(payload)}\n\n"
 
         text = response.answer
         step = 500
         for i in range(0, len(text), step):
             chunk = text[i : i + step]
-            yield f"event: token\\ndata: {json.dumps({'text': chunk})}\\n\\n"
+            yield f"event: token\ndata: {json.dumps({'text': chunk})}\n\n"
             await asyncio.sleep(0)
 
-        yield f"event: completed\\ndata: {json.dumps(response.model_dump())}\\n\\n"
+        yield f"event: completed\ndata: {json.dumps(response.model_dump())}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream")

@@ -14,7 +14,6 @@ https://ragx-backend.sahrdaya.ac.in
 
 1. Create a session when the chat page loads.
 2. Store the returned `session_id` in frontend state.
-3. Optionally call `GET /api/quota?session_id=<id>` to show remaining quota and reset countdown before send.
 4. Send each new user message with that `session_id`.
 5. Render the returned `answer`.
 6. Optionally read chat history when re-opening an existing session.
@@ -158,10 +157,37 @@ DELETE /api/sessions/{session_id}
 
 Useful for ops dashboards or frontend status banners:
 
-- `GET /api/health`
-- `GET /api/ready`
-- `GET /api/load`
-- `GET /api/limits`
+- `GET /api/health` — liveness, `{"status": "ok"}`
+- `GET /api/ready` — `{"ready": bool}`, true when at least one Groq key is not cooling down
+- `GET /api/load` — in-flight request count vs the concurrency cap
+- `GET /api/limits` — what actually throttles traffic, plus advisory ceilings:
+
+```json
+{
+  "enforcement": [
+    "load_control: at most 4 concurrent chat requests, 20s queue wait then 503",
+    "key_pool: reactive cooldown + failover when Groq returns 429",
+    "nginx: per-IP limit_req on /api/chat and /api/chat/stream (nginx deployment only)"
+  ],
+  "advisory_groq_limits": { "rpm": 30, "tpm": 8000, "rpd": 1000, "tpd": 200000 },
+  "inflight_requests": 0,
+  "max_concurrent": 4,
+  "saturated": false,
+  "keys": [
+    {
+      "key_hint": "gsk_...abcd",
+      "busy": false,
+      "busy_for_seconds": 0.0,
+      "failures": 0,
+      "last_error": null
+    }
+  ]
+}
+```
+
+`advisory_groq_limits` is reported for reference only. The app does not meter requests or
+tokens against those numbers — Groq enforces its own limits by returning 429, which the key
+pool handles by cooling the key down and failing over.
 
 
 
@@ -353,13 +379,16 @@ Frontend handling:
 
 ## CORS
 
-The backend reads allowed frontend origins from `.env`:
+CORS is handled at the Nginx edge, not by the FastAPI app. Allowed origins live in
+`deploy/nginx-docker.conf` (currently `Access-Control-Allow-Origin: *`, with OPTIONS
+preflight answered at the edge so browsers can read limiter errors).
 
-```text
-API_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-```
+There is no `API_CORS_ORIGINS` setting. Do not add `CORSMiddleware` to the app while Nginx
+is injecting these headers — two sources produce a duplicate `Access-Control-Allow-Origin`,
+which browsers reject outright.
 
-If your frontend runs on another port or domain, add it there.
+The plain `docker-compose.yml` (single container, no Nginx) serves no CORS headers at all;
+it is meant for local/CLI use or for running behind an existing proxy.
 
 ## Production Notes
 
@@ -377,6 +406,5 @@ If your frontend runs on another port or domain, add it there.
 3. Send `message` plus `session_id` on each turn.
 4. Render `answer`.
 5. Handle `429`, `503`, and `404` cleanly.
-6. Add origin to `API_CORS_ORIGINS` if frontend is blocked by CORS.
+6. If the frontend is blocked by CORS, update the allowed origins in `deploy/nginx-docker.conf`.
 7. On `429`, read retry seconds and lock send button with countdown.
-8. Poll `GET /api/quota` to show remaining chats and reset countdown in UI.

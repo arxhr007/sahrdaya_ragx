@@ -26,8 +26,12 @@ Options:
     --use-playwright Use Playwright for JS-heavy sites
     --max-pages     Maximum pages to scrape
     --delay         Delay between requests in seconds
+    --ignore-robots Crawl even if robots.txt disallows the root path
 
 Outputs:
+    Written relative to the current directory. Pass -o data/raw/sahrdaya so the
+    preprocessing and DB-build scripts can find them.
+
     <prefix>_raw.txt         -> combined raw text per page
     <prefix>_structured.json -> structured JSON (Groq or local fallback)
     <prefix>_rag.txt         -> chunked RAG-ready file: <id>\\t<text>
@@ -1302,6 +1306,7 @@ def main():
     parser.add_argument("--threads", "-t", type=int, default=NUM_THREADS, help="Number of threads (default: 4)")
     parser.add_argument("--sitemap", action="store_true", help="Use known sitemap for sahrdaya.ac.in (faster)")
     parser.add_argument("--single", action="store_true", help="Scrape only the given URL (no crawling) and append to existing output files")
+    parser.add_argument("--ignore-robots", action="store_true", help="Crawl even if robots.txt disallows the root path")
     args = parser.parse_args()
 
     # Override global config
@@ -1325,7 +1330,13 @@ def main():
         return
 
     domain = urlparse(start_url).netloc
-    
+
+    # robots.txt gate. Fails open when robots.txt is unreachable or unparseable.
+    if not args.ignore_robots and not is_allowed_by_robots(start_url):
+        print(f"[!] robots.txt at {domain} disallows crawling the root path.")
+        print("[!] Aborting. Pass --ignore-robots only if you have permission to crawl this site.")
+        sys.exit(1)
+
     # Check if sitemap mode for sahrdaya
     use_sitemap = args.sitemap or "sahrdaya.ac.in" in domain
     

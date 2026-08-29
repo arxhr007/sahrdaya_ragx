@@ -226,7 +226,7 @@ flowchart TD
 | `api/` | FastAPI app split into `core`, `routes`, and `services` layers |
 | `api/services/chat_logger.py` | JSON Lines chat logging (success + error), per-IP files, rotating handler with retention |
 | `api_main.py` | API entrypoint (Uvicorn) |
-| `.env` / `.env.example` | Runtime settings (keys, limits, CORS, concurrency) |
+| `.env` / `.env.example` | Runtime settings (keys, advisory limits, concurrency). CORS is not an app setting -- see `deploy/nginx-docker.conf` |
 | `Dockerfile` | Container image for API service |
 | `docker-compose.yml` | Single-container deployment |
 | `docker-compose.nginx.yml` | 3 API containers + Nginx load balancing |
@@ -280,10 +280,10 @@ nltk.download("punkt_tab")
 
 ```bash
 # Full site crawl
-python scraper.py https://www.sahrdaya.ac.in/ -o sahrdaya --threads 8 --use-playwright
+python scraper.py https://www.sahrdaya.ac.in/ -o data/raw/sahrdaya --threads 8 --use-playwright
 
 # Single page append (example: placement page with modal PDF links)
-python scraper.py https://www.sahrdaya.ac.in/traning-and-placement -o sahrdaya --single --use-playwright
+python scraper.py https://www.sahrdaya.ac.in/traning-and-placement -o data/raw/sahrdaya --single --use-playwright
 ```
 
 This produces `data/raw/sahrdaya_rag.txt`, which is the default input for preprocessing and DB setup.
@@ -348,13 +348,22 @@ API endpoints:
 | `/api/health` | GET | Liveness check |
 | `/api/ready` | GET | Readiness check |
 | `/api/load` | GET | Current in-flight load |
-| `/api/limits` | GET | Local quota usage + key health |
+| `/api/limits` | GET | What actually throttles traffic, advisory Groq ceilings, live load, key health |
 
 The API includes:
-- in-memory session isolation
+- in-memory session isolation (per-process -- the Nginx deployment pins each client
+  to one replica via `hash $binary_remote_addr consistent`)
 - busy-key failover (switch to next key if one key is rate-limited)
-- local quota guardrails for RPM/TPM/RPD/TPD
+- concurrency control via `load_control` (503 once the queue wait is exceeded)
 - full-answer policy (no API-side output truncation; continuation attempts if model stops due length)
+
+The configured `GROQ_RPM/TPM/RPD/TPD_LIMIT` values are **advisory**: the app reports them
+on `/api/limits` but does not meter against them. Real throttling comes from the
+concurrency cap, reactive handling of Groq's own 429s, and the Nginx `limit_req` zone.
+
+CORS is handled only at the Nginx edge (`deploy/nginx-docker.conf`). The plain
+`docker-compose.yml` (single container, no Nginx) serves no CORS headers -- it is for
+local/CLI use or for running behind an existing proxy.
 
 ### Step 5 — Run with Docker (recommended for different computers)
 
@@ -494,10 +503,10 @@ ragx-backend/
 │   └── students.csv        # Student profile source data
 ├── preprocess_data.py      # Data preprocessing pipeline
 ├── sql_db_setup.py         # Shared SQLite DB setup (faculty + former + students)
-├── faculty_extractor.py    # Faculty parser/loader (legacy + listing formats)
-├── former_people_extractor.py # Former people parser/loader
-├── student_db.py           # Student CSV loader + interest normalization
-├── sql_smoke_test.py       # SQL ingestion sanity test
+├── sql_extractors/
+│   ├── faculty_extractor.py    # Faculty parser/loader (legacy + listing formats)
+│   ├── former_people_extractor.py # Former people parser/loader
+│   └── student_db.py           # Student CSV loader + interest normalization
 ├── rag_setup.py            # Retrieval engine (hybrid RAG + GraphRAG + SQL routing)
 ├── main.py                 # CLI chatbot with session analytics
 ├── api/
@@ -508,10 +517,11 @@ ragx-backend/
 │   ├── routes/
 │   │   └── chat.py         # API endpoints (/api/chat, sessions, health)
 │   └── services/
+│       ├── chat_logger.py  # Rotating JSONL chat logs (shared + per-IP)
 │       ├── key_pool.py     # Busy-key failover state
 │       ├── load_control.py # Concurrency and queue controls
-│       ├── rate_limit_manager.py # Local RPM/TPM/RPD/TPD budget tracking
-│       └── session_store.py # In-memory session memory with TTL
+│       ├── session_store.py # In-memory session memory with TTL
+│       └── token_estimator.py # Character-heuristic token counts for response metadata
 ├── api_main.py             # Uvicorn run entrypoint
 ├── .env.example            # Environment template
 ├── Dockerfile              # Docker image build
@@ -521,12 +531,11 @@ ragx-backend/
 │   ├── nginx.conf          # Bare-metal/local nginx config
 │   └── nginx-docker.conf   # Docker nginx config
 ├── docs/
-│   ├── docs/CONTRIBUTING.md # Contribution status and policy
+│   ├── CONTRIBUTING.md     # Contribution status and policy
 │   ├── FRONTEND_INTEGRATION.md # Frontend integration guide
+│   ├── LIMITER_CONTEXT.md  # History of the public-testing rate limiter
 │   ├── WORKING.md          # Technical documentation — how the RAG works
 │   └── FUTURE_ADDITIONS.md # Roadmap and planned improvements
-├── tests/
-│   └── test_api.py         # API tests
 ├── requirements.txt        # Python dependencies
 ├── .index_cache/           # Cached retrieval artifacts (auto-generated)
 │   ├── faiss/              # FAISS vector index

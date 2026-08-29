@@ -28,3 +28,8 @@ _test*.py
 # OS
 Thumbs.db
 .DS_Store
+
+# Scrape artifacts belong in data/raw/. A bare `-o sahrdaya` writes them to the
+# repo root instead; ignore those so a stale duplicate set cannot be committed.
+/sahrdaya_*.txt
+/sahrdaya_*.json
