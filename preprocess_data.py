@@ -17,6 +17,10 @@ import sys
 
 import nltk
 from nltk.tokenize import sent_tokenize
+from dotenv import load_dotenv
+
+# Match rag_setup.py: every entrypoint reads configuration the same way.
+load_dotenv()
 
 # Ensure punkt tokenizer data is available
 try:

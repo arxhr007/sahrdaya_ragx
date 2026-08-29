@@ -54,8 +54,12 @@ from queue import Queue, Empty
 
 import requests
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 
-# ------------------ GROQ API KEY (Environment) ------------------
+# The warning below tells users to set the key "or in .env", so actually read it.
+load_dotenv()
+
+# ------------------ GROQ API KEY (Environment or .env) ------------------
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 # ---------------------------------------------------------------
 
@@ -516,6 +520,66 @@ def _inject_synthetic_doc_links(html: str, urls: Set[str]) -> str:
         return html.replace("</body>", injected + "</body>")
     return html + injected
 
+# Placeholder text the SPA shows while it waits on Firestore. If this is still on the
+# page when we snapshot the HTML, we captured a shell rather than the real content.
+_LOADING_MARKERS = (
+    "loading faculty data",
+    "loading faculty profile",
+    "loading...",
+    "please wait",
+)
+
+# Pages captured before their content rendered, reported at end of crawl.
+unrendered_pages: List[str] = []
+
+
+def looks_unrendered(text: str) -> bool:
+    """True when page text is still a loading placeholder or suspiciously empty."""
+    stripped = (text or "").strip()
+    if len(stripped) < 200:
+        return True
+    lowered = stripped.lower()
+    return any(marker in lowered for marker in _LOADING_MARKERS)
+
+
+def _note_if_unrendered(url: str, text: str) -> None:
+    """Record a page whose extracted content is a placeholder or effectively empty."""
+    if looks_unrendered(text) and url not in unrendered_pages:
+        print(f"[!] No real content extracted from {url} ({len((text or '').strip())} chars)")
+        unrendered_pages.append(url)
+
+
+def _wait_for_content(page, url: str) -> None:
+    """Block until the loading placeholder disappears, or report that it never did."""
+    markers = list(_LOADING_MARKERS)
+    try:
+        page.wait_for_function(
+            """(markers) => {
+                const body = document.body ? document.body.innerText : '';
+                if (!body || body.trim().length < 200) return false;
+                const low = body.toLowerCase();
+                return !markers.some(m => low.includes(m));
+            }""",
+            arg=markers,
+            timeout=20000,
+        )
+        return
+    except Exception:
+        pass
+
+    # One more chance: the first wait may simply have been too short.
+    try:
+        page.wait_for_timeout(5000)
+        body = page.inner_text("body")
+        if not looks_unrendered(body):
+            return
+    except Exception:
+        pass
+
+    print(f"[!] Content never rendered for {url} — capturing placeholder HTML")
+    unrendered_pages.append(url)
+
+
 def fetch_with_playwright(url: str, timeout: int = 60) -> str:
     if not _HAS_PLAYWRIGHT:
         raise RuntimeError("Playwright not installed. Install with `pip install playwright` and run `playwright install`.")
@@ -549,10 +613,13 @@ def fetch_with_playwright(url: str, timeout: int = 60) -> str:
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
-            print(f"[*] Networkidle timeout for {url}, continuing anyway...")
-        
-        # Additional wait for any remaining async operations
-        time.sleep(2)
+            print(f"[*] Networkidle timeout for {url}, waiting for content instead...")
+
+        # The site is a client-rendered SPA: /faculty and /faculty/profile/* serve a
+        # "Loading ..." placeholder until Firestore responds. Continuing here without
+        # checking is how a whole crawl captured 0 of 116 faculty profiles while
+        # reporting success. Wait for the placeholder to actually go away.
+        _wait_for_content(page, url)
 
         # Capture hidden links shown only via popups/modals (e.g., Stats -> Download/Open External).
         discovered_doc_urls = _click_modal_triggers_and_capture(page, url)
@@ -575,6 +642,12 @@ def clean_text_from_soup(soup: BeautifulSoup) -> str:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return "\n".join(lines)
 
+_NON_HTTP_SCHEMES = (
+    "javascript:", "mailto:", "tel:", "sms:", "fax:", "whatsapp:",
+    "callto:", "skype:", "data:", "file:", "ftp:", "#",
+)
+
+
 def extract_links_and_buttons(soup: BeautifulSoup, base_url: str) -> Set[str]:
     links = set()
 
@@ -583,10 +656,13 @@ def extract_links_and_buttons(soup: BeautifulSoup, base_url: str) -> Set[str]:
         href = a.get("href")
         if not href:
             continue
-        # ignore javascript: anchors
-        if href.strip().lower().startswith("javascript:"):
+        # Skip non-navigable schemes. tel:/mailto: used to be queued like any other
+        # link and each one burned a full Playwright page-load before failing.
+        if href.strip().lower().startswith(_NON_HTTP_SCHEMES):
             continue
         full = urljoin(base_url, href)
+        if not full.lower().startswith(("http://", "https://")):
+            continue
         links.add(full)
 
     # common patterns in button onclicks: location.href='...', location='...', window.location="..."
@@ -823,11 +899,15 @@ def structure_with_groq(pages: List[Dict], all_chunks: List[Dict]) -> Dict:
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
         ]
 
+        # 1500 tokens truncated the JSON mid-string, so json.loads below failed with
+        # "Unterminated string" and every run silently fell back to local structuring.
+        # Ask for JSON explicitly and give it room to finish.
         resp = client.chat.completions.create(
             model="openai/gpt-oss-120b",
             messages=messages,
             temperature=0.0,
-            max_completion_tokens=1500
+            max_completion_tokens=8000,
+            response_format={"type": "json_object"},
         )
 
         # Parse response text robustly
@@ -853,8 +933,16 @@ def structure_with_groq(pages: List[Dict], all_chunks: List[Dict]) -> Dict:
         if not raw_text:
             raise RuntimeError("Could not extract text from Groq response.")
 
-        # Parse JSON returned by model
-        parsed = json.loads(raw_text)
+        # Parse JSON returned by model. Report truncation distinctly from other
+        # failures — it means the token budget, not the prompt, is the problem.
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError as decode_error:
+            finish = getattr(getattr(resp, "choices", [None])[0], "finish_reason", None)
+            raise RuntimeError(
+                f"Groq returned unparseable JSON (finish_reason={finish}, "
+                f"{len(raw_text)} chars): {decode_error}"
+            ) from decode_error
         # attach full chunk list computed locally (ensures full coverage)
         parsed.setdefault("chunks", all_chunks)
         parsed.setdefault("word_count", structured["word_count"])
@@ -927,7 +1015,11 @@ def fetch_single_page(url: str, use_playwright: bool = False) -> Optional[Dict]:
         soup = BeautifulSoup(html, "html.parser")
         meta = extract_meta(soup)
         text = clean_text_from_soup(soup)
-        
+
+        # Judge on the EXTRACTED content, not the raw body: nav and footer alone
+        # clear any length threshold while the actual page content is still empty.
+        _note_if_unrendered(normalized, text)
+
         # Also extract links for discovery mode
         links = extract_links_and_buttons(soup, normalized)
         doc_refs = extract_document_references(soup, normalized)
@@ -1150,6 +1242,7 @@ def crawl_page(url: str, base_domain: str, use_playwright: bool = False):
         soup = BeautifulSoup(html, "html.parser")
         meta = extract_meta(soup)
         text = clean_text_from_soup(soup)
+        _note_if_unrendered(normalized, text)
         links = extract_links_and_buttons(soup, normalized)
 
         collected_pages.append({
@@ -1295,6 +1388,66 @@ def scrape_single_page(url: str, output_prefix: str, use_playwright: bool = Fals
 # -----------------------------------------------------------------
 
 # ---------------- Main ----------------
+def load_previous_tracking(output_prefix: str) -> Dict:
+    """Previous run's tracking file, for regression comparison. {} if absent."""
+    try:
+        with open(f"{output_prefix}_tracking.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _report_crawl_health(pages_list: List[Dict], url_tracking: Dict, previous: Dict) -> bool:
+    """Print a crawl-health summary. Returns True when the run should exit non-zero.
+
+    A crawl that quietly captures far less than last time is worse than one that fails:
+    the outputs look fine and the bad data flows straight into the index and the DB.
+    """
+    problems = False
+    print("\n" + "=" * 62)
+    print("CRAWL HEALTH")
+    print("=" * 62)
+
+    if unrendered_pages:
+        problems = True
+        print(f"[!] {len(unrendered_pages)} page(s) captured while still showing a "
+              f"loading placeholder:")
+        for url in unrendered_pages[:10]:
+            print(f"      {url}")
+        if len(unrendered_pages) > 10:
+            print(f"      ... and {len(unrendered_pages) - 10} more")
+        print("    These pages contain no real content. The site renders client-side;")
+        print("    faculty data is also available from the Firestore API used by")
+        print("    sql_extractors/firestore_faculty.py.")
+    else:
+        print(f"[*] All {len(pages_list)} pages rendered real content.")
+
+    prev_urls = previous.get("urls") or {}
+    if prev_urls:
+        prev_count, new_count = len(prev_urls), len(url_tracking)
+        print(f"[*] Pages: {prev_count} previously -> {new_count} now")
+        if new_count < prev_count * 0.9:
+            problems = True
+            print(f"[!] REGRESSION: page count dropped {prev_count - new_count} "
+                  f"({100 * (1 - new_count / prev_count):.0f}%) versus the previous crawl.")
+
+        def _profiles(tracking):
+            return sum(1 for u in tracking if "/faculty/profile/" in u)
+
+        prev_profiles, new_profiles = _profiles(prev_urls), _profiles(url_tracking)
+        if prev_profiles or new_profiles:
+            print(f"[*] Faculty profile pages: {prev_profiles} -> {new_profiles}")
+            if new_profiles < prev_profiles:
+                problems = True
+                print("[!] REGRESSION: fewer faculty profile pages than the previous crawl.")
+
+    if problems:
+        print("\n[!] Crawl completed with problems — review before using these outputs.")
+        print("[!] Restore the previous dataset with: git checkout -- data/raw/")
+    print("=" * 62)
+    return problems
+
+
 def main():
     global MAX_PAGES, REQUEST_DELAY, NUM_THREADS, rate_limiter, visited, collected_pages
     parser = argparse.ArgumentParser(description="Multi-threaded web scraper with sitemap support.")
@@ -1330,6 +1483,10 @@ def main():
         return
 
     domain = urlparse(start_url).netloc
+
+    # Snapshot the previous crawl before it is overwritten, so the health report can
+    # tell "the site shrank" apart from "this crawl failed to render".
+    previous_tracking = load_previous_tracking(args.output)
 
     # robots.txt gate. Fails open when robots.txt is unreachable or unparseable.
     if not args.ignore_robots and not is_allowed_by_robots(start_url):
@@ -1425,6 +1582,9 @@ def main():
 
     print("\nDone.")
     print(f"Tracking file contains {len(url_tracking)} URLs with content hashes and chunk mappings.")
+
+    if _report_crawl_health(pages_list, url_tracking, previous_tracking):
+        sys.exit(1)
     if not _HAS_GROQ:
         print("Note: Groq not installed; structured JSON is a local fallback.")
 

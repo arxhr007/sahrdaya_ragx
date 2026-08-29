@@ -16,12 +16,31 @@ import sqlite3
 import sys
 
 from sql_extractors.faculty_extractor import insert_faculty, parse_listing_pages, parse_profiles
+from sql_extractors.firestore_faculty import fetch_faculty
 from sql_extractors.former_people_extractor import insert_former_people, parse_former_people
 from sql_extractors.student_db import load_students_into_connection
 
 RAW_FILE = "data/raw/sahrdaya_rag.txt"
 DB_FILE = "data/sql/college.db"
 MIN_PROFILE_PARSE_WARN = 20
+
+
+def _fetch_faculty_from_api() -> list[dict] | None:
+    """Faculty from the Firestore REST API, or None if it is unavailable.
+
+    Returning None (rather than raising) lets build_db fall back to HTML parsing.
+    """
+    try:
+        rows = fetch_faculty()
+    except Exception as exc:
+        print(f"[!] Firestore faculty API unavailable ({exc}); falling back to HTML parsing.")
+        print("[!] The site renders faculty pages client-side, so the fallback may find few or no profiles.")
+        return None
+
+    with_designation = sum(1 for r in rows if r["designation"])
+    print(f"[*] Fetched {len(rows)} faculty from the Firestore API "
+          f"({with_designation} with a designation)")
+    return rows
 
 
 def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
@@ -33,23 +52,28 @@ def build_db(db_path: str = DB_FILE, raw_path: str = RAW_FILE):
     with open(raw_path, "r", encoding="utf-8") as f:
         raw_text = f.read()
 
-    # 1) Parse faculty profile pages
-    profiles = parse_profiles(raw_text)
-    profile_count = len(profiles)
-    existing_emails = {p["email"] for p in profiles if p["email"]}
-    print(f"[*] Parsed {profile_count} faculty from individual profile pages")
+    # 1) Faculty — Firestore API first, HTML parsing only as a fallback.
+    # The site renders /faculty and /faculty/profile/* client-side, so scraped HTML may
+    # contain zero profiles even when the crawl "succeeded". The API is the source of
+    # truth and is the only place the designation/HOD field is reliably available.
+    profiles = _fetch_faculty_from_api()
 
-    # 2) Parse listing pages for additional faculty
-    listing_profiles = parse_listing_pages(raw_text, existing_emails)
-    print(f"[*] Parsed {len(listing_profiles)} additional faculty from listing pages")
+    if profiles is None:
+        profiles = parse_profiles(raw_text)
+        profile_count = len(profiles)
+        existing_emails = {p["email"] for p in profiles if p["email"]}
+        print(f"[*] Parsed {profile_count} faculty from individual profile pages")
 
-    if profile_count < MIN_PROFILE_PARSE_WARN:
-        print(
-            "[!] WARNING: very low faculty profile extraction count. "
-            "Source format may have changed; verify scraper/preprocess outputs before relying on this DB."
-        )
+        listing_profiles = parse_listing_pages(raw_text, existing_emails)
+        print(f"[*] Parsed {len(listing_profiles)} additional faculty from listing pages")
 
-    profiles.extend(listing_profiles)
+        if profile_count < MIN_PROFILE_PARSE_WARN:
+            print(
+                "[!] WARNING: very low faculty profile extraction count. "
+                "Source format may have changed; verify scraper/preprocess outputs before relying on this DB."
+            )
+
+        profiles.extend(listing_profiles)
 
     # 3) Parse former people from dedicated extractor module
     former = parse_former_people(raw_text)

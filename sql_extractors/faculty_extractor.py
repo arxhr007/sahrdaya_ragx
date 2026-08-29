@@ -74,8 +74,20 @@ def normalise_dept(raw: str) -> str:
 
 
 def _clean_name(name: str) -> str:
+    # Leftover UI text can be glued to the front of a scraped name — "file Dr. V.
+    # Vijikala" reached the database that way. Strip it before the honorific, since
+    # the honorific pattern below is anchored and would otherwise not match.
+    name = (name or "").strip()
+    noise = re.compile(
+        r"^(?:file|view|profile|download|back\s+to|read\s+more|\d+)[\s.:-]*",
+        re.IGNORECASE,
+    )
+    while True:
+        stripped = noise.sub("", name).strip()
+        if stripped == name:
+            break
+        name = stripped
     name = re.sub(r"^(?:Dr\.?\s+|Mr\.?\s+|Ms\.?\s+|Mrs\.?\s+)", "", name, flags=re.IGNORECASE).strip()
-    name = re.sub(r"^\d+\s*", "", name).strip()
     name = re.sub(r"\s+", " ", name)
     if name == name.upper() and len(name) > 3:
         name = " ".join(w.title() if len(w) > 1 else w for w in name.split())

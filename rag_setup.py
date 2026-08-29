@@ -125,8 +125,10 @@ _QUERY_EXPANSIONS = {
     r"\bash\b":   "Applied Science and Humanities ASH",
     r"\bce\b":    "Civil Engineering CE",
     r"\bmech\b":  "Mechanical Engineering ME",
-    r"\bhods?\b":  "Head of Department HOD Manishankar Drisya Dhanya Vijikala Sukhila Jis Paul Ambily Francis",
-    r"\bprincipal\b": "Principal Dr. Ramkumar",
+    # Leadership names are appended at call time from the DB (see _leadership_terms)
+    # rather than hardcoded here, where they went stale as staff changed.
+    r"\bhods?\b":  "Head of Department HOD",
+    r"\bprincipal\b": "Principal",
     r"\bexecutive director\b": "Executive Director Fr. Dr. Anto Chungath",
     r"\bchairman\b": "Chairman Mar Pauly Kannookadan Bishop",
     r"\bplacement\b": "placement training internship recruitment",
@@ -134,14 +136,40 @@ _QUERY_EXPANSIONS = {
     r"\bformer\b": "former people previous past ex",
 }
 
+@lru_cache(maxsize=1)
+def _leadership_terms() -> str:
+    """Current leadership names, read from the faculty table.
+
+    Kept out of _QUERY_EXPANSIONS so the boost terms follow the data instead of a
+    hardcoded list that silently goes stale when staff change.
+    """
+    try:
+        conn = sqlite3.connect(FACULTY_DB)
+        rows = conn.execute(
+            "SELECT DISTINCT name FROM faculty "
+            "WHERE designation IS NOT NULL AND TRIM(designation) != '' "
+            "AND designation NOT LIKE '%Professor%'"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return ""
+    return " ".join(name for (name,) in rows if name)
+
+
 def expand_query(question: str) -> str:
     """Expand terms for retrieval/routing; expects pre-normalized input."""
     expanded = (question or "").strip()
     if not expanded:
         return ""
+    wants_leadership = bool(re.search(r"\bhods?\b|\bprincipal\b|\bdean\b|\bhead of department\b",
+                                      expanded, re.IGNORECASE))
     for pattern, replacement in _QUERY_EXPANSIONS.items():
         if re.search(pattern, expanded, re.IGNORECASE):
             expanded = re.sub(pattern, replacement, expanded, flags=re.IGNORECASE)
+    if wants_leadership:
+        names = _leadership_terms()
+        if names:
+            expanded = f"{expanded} {names}"
     return expanded
 
 
@@ -154,6 +182,16 @@ _DEPARTMENT_CANONICAL_MAP = {
     r"\bce\b|civil": "Civil Engineering",
     r"\bmech\b|mechanical": "Mechanical Engineering",
     r"\bash\b|applied\s+science": "Applied Science and Humanities",
+}
+
+# Current leadership roles, matched against the faculty.designation column.
+# Ordered: "assistant hod" must win before the plain "hod" pattern.
+_ROLE_CANONICAL_MAP = {
+    r"\bassistant\s+hods?\b|\bassistant\s+head\s+of\s+(?:the\s+)?department\b": "Assistant HOD",
+    r"\bhods?\b|\bhead\s+of\s+(?:the\s+)?department\b|\bdepartment\s+head\b": "Head of Department",
+    r"\bvice\s+principal\b": "Vice Principal",
+    r"\bprincipal\b": "Principal",
+    r"\bdean\b": "Dean",
 }
 
 _FORMER_ROLE_CANONICAL_MAP = {
@@ -176,6 +214,12 @@ def _looks_single_person_query(q: str) -> bool:
         return False
     if re.search(r"\b(list|show all|all\s+|who are|how many|count)\b", question):
         return False
+    # A named role plus a department identifies one person ("ece hod"), even without
+    # a "who is" prefix. Without this the query reads as a department listing.
+    if re.search(r"\bhods?\b|\bhead\s+of\s+(?:the\s+)?department\b|\bprincipal\b|\bdean\b", question):
+        if not re.search(r"\b(former|past|previous|ex)\b", question):
+            return True
+
     patterns = [
         r"^who\s+is\s+",
         r"^tell\s+me\s+about\s+",
@@ -235,6 +279,25 @@ def _deterministic_query_map(question: str) -> str:
             detected_department = canonical
             break
 
+    # Role questions come first. "ece hod" and "who is the HOD of CSE" name ONE person,
+    # but "hod" also matches has_people_entity below, which would rewrite them into a
+    # whole-department listing and lose the intent entirely.
+    is_former_query = bool(re.search(r"\b(former|past|previous|ex)\b", q_lower))
+    detected_role = None
+    if not is_former_query:
+        for pattern, canonical in _ROLE_CANONICAL_MAP.items():
+            if re.search(pattern, q_lower, re.IGNORECASE):
+                detected_role = canonical
+                break
+
+    if detected_role:
+        if detected_department:
+            return f"who is the {detected_role} of {detected_department}"
+        # No department named: "list all HODs" stays bulk, "who is the principal" does not.
+        if re.search(r"\b(list|show|all|every|each)\b", q_lower):
+            return f"list all {detected_role}"
+        return f"who is the {detected_role}"
+
     # Check for department + list-like pattern (e.g., "cse list all", "cse faculty", "ece members list").
     # Match if: department + list verb, OR department + people entity, OR department + "all"
     if detected_department and (has_list_intent or has_people_entity or has_all_keyword):
@@ -274,9 +337,23 @@ def map_query_to_preset(question: str) -> str:
 
 
 def canonicalize_query_pipeline(question: str) -> tuple[str, str, str]:
-    """Two-stage canonicalization contract: normalize -> map -> expand (+creator terms)."""
-    normalized = normalize_user_query(question)
-    mapped = map_query_to_preset(normalized)
+    """Two-stage canonicalization contract: normalize -> map -> expand (+creator terms).
+
+    The normalize and map stages are each an LLM round-trip, together adding ~15s to
+    every query — enough to make an otherwise 2s SQL answer take 19s.
+
+    The deterministic map recognises shorthand and role/department shapes by keyword, so
+    it tolerates typos on its own ("who is teh hod of ece" still resolves). When it fires
+    we already hold an exact canonical query and both LLM calls are pure overhead, so
+    skip them. Queries it does not recognise still get the full treatment.
+    """
+    raw = re.sub(r"\s+", " ", (question or "").strip())
+    direct = _deterministic_query_map(raw)
+    if direct and direct != raw:
+        normalized, mapped = raw, direct
+    else:
+        normalized = normalize_user_query(question)
+        mapped = map_query_to_preset(normalized)
     expanded = expand_creator_query(expand_query(mapped))
     if QUERY_PIPELINE_DEBUG:
         print("[query-pipeline]", {
@@ -811,22 +888,85 @@ INSTRUCTIONS:
 - For people: provide Name, Designation, Department, Email if present.
 - For LIST queries: show ALL matching items in a numbered list or table.
 - Resolve pronouns using conversation history.
-- If the answer is not in context, suggest visiting: https://sahrdaya.ac.in/.
-- Redirect non-college queries to Sahrdaya topics.
-- If asked for a document, PDF, regulation, form, handbook, download, placements report, or statistics file, return direct URL(s) from context first.
-- Always print raw URLs in plain text (starting with http:// or https://). Do not hide links behind markdown labels.
-- Never invent URLs. If none are present in context, explicitly say no direct link was found in context.
+
+LINKS — follow this order exactly:
+- If asked for a document, PDF, regulation, form, handbook, placements report, syllabus, or
+  statistics file: search the CONTEXT for URLs and print every relevant one.
+- Print raw URLs in plain text (starting with http:// or https://). Never hide a link behind
+  a markdown label, and never invent a URL.
+- Do NOT say "no direct link was found" while any URL for the requested document appears in
+  the context. Only say that when the context genuinely contains none.
+- The bare homepage https://sahrdaya.ac.in/ is a last resort for when the context has no
+  specific link at all. It is not an answer to a request for a particular document, so never
+  offer it in place of a link that exists in the context.
+
+SCOPE:
+- Answer only questions about Sahrdaya College. For anything else, say it is outside what you
+  cover and point to https://sahrdaya.ac.in/.
+- This applies to requests to PERFORM A TASK as much as to questions of fact. Do not write
+  poems, stories, essays, songs, jokes, code, or translations, and do not do general homework,
+  even if asked to make them about the college. Decline briefly and redirect to college topics.
+- Never pad an answer with unrelated facts from the context to satisfy such a request.
+
+- If the answer is not in context, say so and suggest visiting: https://sahrdaya.ac.in/.
 - Be concise but complete.""")
 
 # ============ FACULTY SQL DATABASE ============
 
 FACULTY_DB = "data/sql/college.db"
+DB_HASH_FILE = os.path.join(CACHE_DIR, "db_source_hash.txt")
+
+
+def _db_source_hash() -> str:
+    """Fingerprint of the inputs the SQL DB is built from.
+
+    FAISS/BM25 already rebuild when their source changes (_data_hash); without the
+    same check here a re-scrape left college.db silently stale.
+    """
+    digest = hashlib.md5()
+    for path in (RAW_FILE, "data/students.csv"):
+        try:
+            with open(path, "rb") as fh:
+                digest.update(fh.read())
+        except OSError:
+            digest.update(b"<missing>")
+        digest.update(b"|")
+    return digest.hexdigest()
+
+
+def _db_hash_is_current() -> bool:
+    try:
+        with open(DB_HASH_FILE, "r", encoding="utf-8") as fh:
+            return fh.read().strip() == _db_source_hash()
+    except OSError:
+        return False
+
+
+def _write_db_hash() -> None:
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(DB_HASH_FILE, "w", encoding="utf-8") as fh:
+            fh.write(_db_source_hash())
+    except OSError:
+        pass
+
 
 # Build DB on first import if it doesn't exist
 if not os.path.exists(FACULTY_DB):
     print("[*] data/sql/college.db not found — building from data/raw/sahrdaya_rag.txt...")
     from sql_db_setup import build_db
     build_db(FACULTY_DB)
+    _write_db_hash()
+elif not _db_hash_is_current():
+    print("[*] Source data changed since data/sql/college.db was built — rebuilding...")
+    from sql_db_setup import build_db
+    build_db(FACULTY_DB)
+    _write_db_hash()
+    _conn = sqlite3.connect(FACULTY_DB)
+    _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
+    _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
+    _conn.close()
+    print(f"[*] Faculty SQL database rebuilt ({_cnt} faculty + {_fcnt} former people)")
 else:
     _conn = sqlite3.connect(FACULTY_DB)
     _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
@@ -840,6 +980,7 @@ else:
         os.remove(FACULTY_DB)
         from sql_db_setup import build_db
         build_db(FACULTY_DB)
+        _write_db_hash()
         _conn = sqlite3.connect(FACULTY_DB)
         _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
         _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
@@ -869,7 +1010,8 @@ TABLE 1: faculty  (current faculty & staff)
 COLUMNS:
   id               INTEGER PRIMARY KEY
   name             TEXT        -- faculty member's full name
-  designation      TEXT        -- e.g. 'Assistant Professor', 'Associate Professor', 'Professor', 'Head Of Department', 'Assistant Head Of Department', 'Principal', 'Dean'
+  designation      TEXT        -- EXACT values in the data: 'Assistant Professor', 'Associate Professor',
+                               -- 'Professor', 'Head of Department', 'Assistant HOD', 'Principal', 'Dean'
   department       TEXT        -- one of: 'Computer Science Engineering', 'Electronics and Communication Engineering', 'Electrical and Electronics Engineering', 'Civil Engineering', 'Biotechnology Engineering', 'Biomedical Engineering', 'Applied Science and Humanities'
   email            TEXT        -- @sahrdaya.ac.in email
   has_phd          INTEGER     -- 1 if holds PhD, 0 otherwise
@@ -931,7 +1073,14 @@ DEPARTMENT ALIASES (for faculty table):
 IMPORTANT NOTES:
   - For faculty table: use LIKE with %keyword% for department matching
   - For PhD queries: use has_phd = 1 for completed, phd_pursuing = 1 for pursuing
-  - For HODs: WHERE designation LIKE '%Head%Department%'
+  - For HODs: WHERE designation LIKE '%Head of Department%'
+  - ROLE QUESTIONS NAME ONE PERSON. 'who is the HOD of CSE' must filter on BOTH
+    designation AND department and return that single person. Never answer a role
+    question by listing the whole department.
+      Correct: SELECT name, designation, department, email FROM faculty
+               WHERE designation LIKE '%Head of Department%'
+                 AND department LIKE '%Computer Science Engineering%'
+      Wrong:   SELECT * FROM faculty WHERE department LIKE '%Computer Science Engineering%'
   - For FORMER/PAST people: query the former_people table, use exact role match (role = 'Principal'), NOT LIKE
     - For student-interest queries, use JOINs across students + student_interests + interests
     - Interest matching should use canonical_name and exact equality where possible
@@ -1067,6 +1216,50 @@ def _student_single_lookup_sql(question: str) -> str | None:
     )
 
 
+_ROLE_LOOKUP_COLUMNS = (
+    "SELECT name, designation, department, email, experience_years, research_areas "
+    "FROM faculty"
+)
+
+
+def _role_lookup_sql(question: str) -> str | None:
+    """Deterministic SQL for current-leadership questions.
+
+    "who is the HOD of CSE" used to reach the LLM classifier, which wrote a
+    department-wide SELECT and returned all 35 CSE staff. The designation column is
+    populated from the faculty API, so build the query directly and filter on it.
+
+    Expects the canonical form produced by _deterministic_query_map(), and also
+    tolerates the raw phrasing.
+    """
+    q = (question or "").strip().lower()
+    if not q or re.search(r"\b(former|past|previous|ex)\b", q):
+        return None
+
+    role = None
+    for pattern, canonical in _ROLE_CANONICAL_MAP.items():
+        if re.search(pattern, q, re.IGNORECASE):
+            role = canonical
+            break
+    if role is None or role == "Vice Principal":
+        # Vice Principal is a former-people role, not a faculty designation.
+        return None
+
+    department = None
+    for pattern, canonical in _DEPARTMENT_CANONICAL_MAP.items():
+        if re.search(pattern, q, re.IGNORECASE):
+            department = canonical
+            break
+
+    escaped_role = role.replace("'", "''")
+    where = [f"designation LIKE '%{escaped_role}%'"]
+    if department:
+        escaped_dept = department.replace("'", "''")
+        where.append(f"department LIKE '%{escaped_dept}%'")
+
+    return f"{_ROLE_LOOKUP_COLUMNS} WHERE {' AND '.join(where)} ORDER BY department, name"
+
+
 def _is_bulk_entity_query(question: str) -> bool:
     """Gate SQL usage to explicit BULK faculty/former-people/student intents only.
 
@@ -1138,12 +1331,18 @@ def _is_bulk_entity_query(question: str) -> bool:
 
 def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str | None:
     """Ask the LLM if this question needs SQL. Returns SQL string or None."""
-    normalized_question, _, expanded_question = canonicalize_query_pipeline(question)
+    normalized_question, mapped_question, expanded_question = canonicalize_query_pipeline(question)
 
     # Fast path: explicit single-person student lookups should not depend on RAG.
     direct_student_sql = _student_single_lookup_sql(normalized_question)
     if direct_student_sql:
         return direct_student_sql
+
+    # Fast path: current leadership ("who is the HOD of CSE"). Deterministic so the
+    # classifier cannot turn a one-person question into a department roster.
+    role_sql = _role_lookup_sql(mapped_question)
+    if role_sql:
+        return role_sql
 
     # Hard gate: only attempt SQL for explicit bulk faculty/former/student asks.
     if not _is_bulk_entity_query(expanded_question):
@@ -1298,6 +1497,43 @@ def execute_faculty_sql(sql: str) -> tuple[list[str], list[tuple]] | None:
         return None
 
 
+def _drop_empty_columns(columns: list[str], rows: list[tuple]) -> tuple[list[str], list[tuple]]:
+    """Remove columns where every row is NULL/blank/zero — they only add width."""
+    keep = []
+    for i, name in enumerate(columns):
+        for row in rows:
+            value = row[i]
+            if value is None:
+                continue
+            if isinstance(value, (int, float)) and value == 0:
+                continue
+            if str(value).strip():
+                keep.append(i)
+                break
+    if not keep or len(keep) == len(columns):
+        return columns, rows
+    return [columns[i] for i in keep], [tuple(row[i] for i in keep) for row in rows]
+
+
+# The columns worth showing when listing people; anything else is detail for a single
+# profile, not for a roster.
+_PEOPLE_SUMMARY_COLUMNS = (
+    "name", "designation", "role", "department", "email",
+    "experience_years", "start_year", "end_year", "year_of_graduation",
+)
+
+
+def _limit_people_columns(columns: list[str], rows: list[tuple]) -> tuple[list[str], list[tuple]]:
+    """For multi-row people results, keep a readable summary column set."""
+    lowered = [c.lower() for c in columns]
+    if "name" not in lowered:
+        return columns, rows
+    keep = [i for i, c in enumerate(lowered) if c in _PEOPLE_SUMMARY_COLUMNS]
+    if not keep or len(keep) == len(columns):
+        return columns, rows
+    return [columns[i] for i in keep], [tuple(row[i] for i in keep) for row in rows]
+
+
 def format_sql_results(columns: list[str], rows: list[tuple], question: str = "") -> str:
     """Format SQL query results as a markdown table."""
     if not rows:
@@ -1344,7 +1580,14 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
             pairs.append(f"- **{label}:** {value}")
         return "\n".join(pairs)
 
-    # Table output
+    # Table output.
+    # `SELECT *` on faculty yields 18 columns, most of them empty for most people —
+    # "list all faculty" rendered a 21 KB wall of blank cells. Narrow the table to the
+    # columns that actually carry information before formatting.
+    columns, rows = _drop_empty_columns(columns, rows)
+    if len(rows) > 1:
+        columns, rows = _limit_people_columns(columns, rows)
+
     # Clean column names for display
     display_cols = []
     for c in columns:
