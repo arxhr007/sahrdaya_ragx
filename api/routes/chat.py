@@ -353,7 +353,10 @@ async def _process_chat(req: ChatRequest, session_id: str, client_ip: str = "unk
 
 @router.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    # rag_loaded reports whether the retrieval engine has actually been built. The
+    # frontend status indicator has always read this field; before lazy init there was
+    # nothing meaningful to report and it was simply omitted, leaving the badge stuck.
+    return {"status": "ok", "rag_loaded": rag_setup.engine_ready()}
 
 
 @router.get("/ready")

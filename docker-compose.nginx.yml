@@ -6,7 +6,12 @@ services:
     env_file:
       - .env
     environment:
-      GROQ_API_KEYS: ${GROQ_API_KEY_1}
+      # Every replica gets every key. Pinning one key per replica made the
+      # key-pool failover dead code: with a single key the retry loop in
+      # _invoke_with_key_failover has nothing to fail over to, so one 429
+      # took the replica out until the cooldown expired. KeyPool tracks busy
+      # state per key, so sharing the pool is safe.
+      GROQ_API_KEYS: ${GROQ_API_KEY_1},${GROQ_API_KEY_2},${GROQ_API_KEY_3}
     restart: unless-stopped
     volumes:
       - ./.index_cache:/app/.index_cache
@@ -26,7 +31,7 @@ services:
     env_file:
       - .env
     environment:
-      GROQ_API_KEYS: ${GROQ_API_KEY_2}
+      GROQ_API_KEYS: ${GROQ_API_KEY_1},${GROQ_API_KEY_2},${GROQ_API_KEY_3}
     restart: unless-stopped
     volumes:
       - ./.index_cache:/app/.index_cache
@@ -46,7 +51,7 @@ services:
     env_file:
       - .env
     environment:
-      GROQ_API_KEYS: ${GROQ_API_KEY_3}
+      GROQ_API_KEYS: ${GROQ_API_KEY_1},${GROQ_API_KEY_2},${GROQ_API_KEY_3}
     restart: unless-stopped
     volumes:
       - ./.index_cache:/app/.index_cache

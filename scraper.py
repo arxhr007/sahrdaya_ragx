@@ -89,7 +89,8 @@ MAX_PAGES = 1000           # safety cap on number of pages to crawl
 REQUEST_DELAY = .5       # seconds delay between requests (politeness)
 USER_AGENT = "Mozilla/5.0 (compatible; site-crawler/1.0; +https://example.com)"
 CHUNK_CHAR_SIZE = 1800    # characters per chunk for RAG
-MAX_CHUNKS_FOR_MODEL = 12 # how many chunks to send to Groq for structuring
+MAX_CHUNKS_FOR_MODEL = 6  # chunks sent to Groq; prompt + completion must fit the
+                          # 8000 tokens-per-minute ceiling (12 chunks got a 413)
 NUM_THREADS = 4           # default number of concurrent threads
 # -----------------------------------------------------------------
 
@@ -384,6 +385,19 @@ def _collect_document_urls_from_page(page, base_url: str) -> Set[str]:
     return found
 
 
+def _same_page(current: str, original: str) -> bool:
+    """Compare URLs ignoring scheme, www and trailing slash.
+
+    The site redirects www -> apex, so a plain string compare would report a
+    navigation on every page and send the crawler into a pointless go_back loop.
+    """
+    def norm(u):
+        u = re.sub(r"^https?://", "", (u or "").strip().lower())
+        u = re.sub(r"^www\.", "", u)
+        return u.rstrip("/")
+    return norm(current) == norm(original)
+
+
 def _click_modal_triggers_and_capture(page, url: str) -> Set[str]:
     """Open likely modals/popups and capture hidden document links from actions inside."""
     captured: Set[str] = set()
@@ -449,6 +463,16 @@ def _click_modal_triggers_and_capture(page, url: str) -> Set[str]:
                     el.click(timeout=2500)
                     clicked += 1
                     time.sleep(0.35)
+                    # Some "triggers" are ordinary links. Clicking one navigates away,
+                    # and every later click then runs against the wrong page. Go back
+                    # so the rest of this page's triggers still work.
+                    if not _same_page(page.url, url):
+                        try:
+                            page.go_back(timeout=8000)
+                            page.wait_for_timeout(500)
+                        except Exception:
+                            pass
+                        continue
 
                     # Collect links after modal opens.
                     for u in _collect_document_urls_from_page(page, url):
@@ -551,27 +575,32 @@ def _note_if_unrendered(url: str, text: str) -> None:
 
 def _wait_for_content(page, url: str) -> None:
     """Block until the loading placeholder disappears, or report that it never did."""
+    # Measure the SAME region clean_text_from_soup() extracts: <main>/<article> when
+    # present, else <body>. Watching document.body alone is useless on this site — the
+    # nav and footer clear any length threshold while <main> is still a spinner, so the
+    # wait returned instantly and 107 pages were captured empty.
     markers = list(_LOADING_MARKERS)
-    try:
-        page.wait_for_function(
-            """(markers) => {
-                const body = document.body ? document.body.innerText : '';
-                if (!body || body.trim().length < 200) return false;
-                const low = body.toLowerCase();
-                return !markers.some(m => low.includes(m));
-            }""",
-            arg=markers,
-            timeout=20000,
-        )
-        return
-    except Exception:
-        pass
+    predicate = """(markers) => {
+        const el = document.querySelector('main') || document.querySelector('article')
+                   || document.body;
+        if (!el) return false;
+        const text = (el.innerText || '').trim();
+        if (text.length < 200) return false;
+        const low = text.toLowerCase();
+        return !markers.some(m => low.includes(m));
+    }"""
 
-    # One more chance: the first wait may simply have been too short.
+    for timeout_ms in (20000, 10000):
+        try:
+            page.wait_for_function(predicate, arg=markers, timeout=timeout_ms)
+            return
+        except Exception:
+            # A second, longer look: slow Firestore responses are common here.
+            page.wait_for_timeout(3000)
+
     try:
-        page.wait_for_timeout(5000)
-        body = page.inner_text("body")
-        if not looks_unrendered(body):
+        el = page.query_selector("main") or page.query_selector("article")
+        if not looks_unrendered(el.inner_text() if el else page.inner_text("body")):
             return
     except Exception:
         pass
@@ -621,10 +650,14 @@ def fetch_with_playwright(url: str, timeout: int = 60) -> str:
         # reporting success. Wait for the placeholder to actually go away.
         _wait_for_content(page, url)
 
+        # Snapshot the rendered page BEFORE touching anything. Modal "triggers" include
+        # ordinary links, and clicking one navigates away — the old order captured the
+        # page we landed on instead, which is how 107 pages (and all 116 faculty
+        # profiles) came back empty while the crawl reported success.
+        html = page.content()
+
         # Capture hidden links shown only via popups/modals (e.g., Stats -> Download/Open External).
         discovered_doc_urls = _click_modal_triggers_and_capture(page, url)
-
-        html = page.content()
         html = _inject_synthetic_doc_links(html, discovered_doc_urls)
         browser.close()
         return html
@@ -899,14 +932,16 @@ def structure_with_groq(pages: List[Dict], all_chunks: List[Dict]) -> Dict:
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
         ]
 
-        # 1500 tokens truncated the JSON mid-string, so json.loads below failed with
-        # "Unterminated string" and every run silently fell back to local structuring.
-        # Ask for JSON explicitly and give it room to finish.
+        # 1500 tokens truncated the JSON mid-string ("Unterminated string"), so every
+        # run silently fell back to local structuring. But the budget here is the whole
+        # request: prompt + completion must fit the 8000 tokens-per-minute ceiling, and
+        # asking for 8000 completion tokens got a 413 instead. Keep the sum inside it —
+        # MAX_CHUNKS_FOR_MODEL bounds the prompt side.
         resp = client.chat.completions.create(
             model="openai/gpt-oss-120b",
             messages=messages,
             temperature=0.0,
-            max_completion_tokens=8000,
+            max_completion_tokens=4000,
             response_format={"type": "json_object"},
         )
 

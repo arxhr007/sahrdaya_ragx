@@ -1,12 +1,7 @@
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_community.retrievers import BM25Retriever
-from langchain_classic.retrievers.ensemble import EnsembleRetriever
-from langchain_groq import ChatGroq
-from langchain_core.runnables import RunnableLambda
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.documents import Document
+# Annotations are not evaluated at def time, so signatures may reference names
+# (Document, CrossEncoder, ...) that only exist after the lazy _initialize().
+from __future__ import annotations
+
 from operator import itemgetter
 from functools import lru_cache
 from collections import defaultdict
@@ -19,29 +14,83 @@ import hashlib
 import pickle
 import time
 import sqlite3
-from sentence_transformers import CrossEncoder
+import threading
 
-try:
-    import networkx as nx
-    from networkx.readwrite import json_graph
-except Exception:
-    nx = None
-    json_graph = None
 
 from sql_extractors.student_db import ensure_student_data
 
-
-URL_PATTERN = re.compile(r"https?://[^\s)\]\}>\"']+")
-
-CREATOR_CANONICAL_LINE = (
-    "This AI assistant was created by Aaron Thomas, Shayen Thomas, "
-    "Mishal Shanavas, and Mathew Geejo."
+# Query routing, SQL building and formatting live in rag_query.py: they depend only
+# on the standard library, so they stay importable (and testable) without loading a
+# single model. Re-exported here so existing callers keep importing from rag_setup.
+from rag_query import (
+    BM25_CACHE,
+    BM25_LARGE_CACHE,
+    CACHE_DIR,
+    CLEANED_FILE,
+    CREATOR_CANONICAL_LINE,
+    CREATOR_QUERY_PATTERN,
+    DB_HASH_FILE,
+    FACULTY_DB,
+    FAISS_DIR,
+    GRAPH_HASH_FILE,
+    GRAPH_ROUTE_PRINT,
+    GRAPH_SCHEMA_V1,
+    GRAPH_STOPWORDS,
+    HASH_FILE,
+    RAW_FILE,
+    TRACKING_FILE,
+    URL_PATTERN,
+    _DEPARTMENT_CANONICAL_MAP,
+    _FORMER_ROLE_CANONICAL_MAP,
+    _PEOPLE_SUMMARY_COLUMNS,
+    _QUERY_EXPANSIONS,
+    _ROLE_CANONICAL_MAP,
+    _ROLE_LOOKUP_COLUMNS,
+    _bm25_preprocess,
+    _cache_is_valid,
+    _data_hash,
+    _db_hash_is_current,
+    _db_source_hash,
+    _deterministic_query_map,
+    _drop_empty_columns,
+    _extract_interest_from_query,
+    _extract_person_name_candidate,
+    _extract_urls_from_docs,
+    _extract_urls_from_text,
+    _file_hash,
+    _get_faculty_columns,
+    _get_former_columns,
+    _get_interests_columns,
+    _get_student_interests_columns,
+    _get_students_columns,
+    _graph_data_hash,
+    _graph_link_intent,
+    _is_bulk_entity_query,
+    _is_safe_mapped_query,
+    _leadership_terms,
+    _limit_people_columns,
+    _load_tracking_pages,
+    _looks_single_person_query,
+    _normalize_name_for_match,
+    _print_graphrag_used,
+    _role_lookup_sql,
+    _save_graph_hash,
+    _save_hash,
+    _student_single_lookup_sql,
+    _tokenize_graph_query,
+    _write_db_hash,
+    execute_faculty_sql,
+    expand_creator_query,
+    expand_query,
+    format_sql_results,
+    is_creator_query,
+    is_list_query,
+    validate_faculty_sql,
 )
 
-CREATOR_QUERY_PATTERN = re.compile(
-    r"\b(who\s+created\s+you|creator|created\s+by|built\s+by|developers?|dev\s*team|website\s*team|credits?)\b",
-    re.IGNORECASE,
-)
+
+
+
 
 CREATOR_BOOST_TERMS = [
     "created by",
@@ -67,23 +116,9 @@ GRAPH_ROUTE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-GRAPH_STOPWORDS = {
-    "a", "an", "and", "the", "for", "with", "from", "that", "this", "what", "when", "where",
-    "which", "show", "list", "give", "need", "want", "have", "has", "all", "about", "your", "their",
-    "there", "into", "data", "details", "please", "can", "you", "how", "find", "page", "pages",
-}
-
-GRAPH_ROUTE_PRINT = os.environ.get("GRAPH_ROUTE_PRINT", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _print_graphrag_used(question: str, num_docs: int) -> None:
-    """Print a clear marker when GraphRAG route is selected (for testing)."""
-    if not GRAPH_ROUTE_PRINT:
-        return
-    q = re.sub(r"\s+", " ", (question or "")).strip()
-    if len(q) > 140:
-        q = q[:137] + "..."
-    print(f"[route] graph_rag used | docs={num_docs} | query=\"{q}\"")
+
 
 # ============ QUERY EXPANSION ============
 
@@ -94,6 +129,7 @@ QUERY_PIPELINE_DEBUG = os.environ.get("QUERY_PIPELINE_DEBUG", "0").strip().lower
 
 def normalize_user_query(question: str) -> str:
     """Apply LLM-based query correction before routing/retrieval."""
+    ensure_engine()
     normalized = (question or "").strip()
     if not normalized:
         return ""
@@ -104,6 +140,7 @@ def normalize_user_query(question: str) -> str:
 @lru_cache(maxsize=512)
 def _llm_correct_query(query: str) -> str:
     """Use the configured LLM to correct spelling/typos while preserving intent."""
+    ensure_engine()
     if not query:
         return query
     if _query_correct_chain is None:
@@ -116,209 +153,26 @@ def _llm_correct_query(query: str) -> str:
     except Exception:
         return query
 
-_QUERY_EXPANSIONS = {
-    r"\bcse\b":   "Computer Science Engineering CSE",
-    r"\bece\b":   "Electronics and Communication Engineering ECE",
-    r"\beee\b":   "Electrical and Electronics Engineering EEE",
-    r"\bbme\b":   "Biomedical Engineering BME",
-    r"\bbt\b":    "Biotechnology Engineering BT",
-    r"\bash\b":   "Applied Science and Humanities ASH",
-    r"\bce\b":    "Civil Engineering CE",
-    r"\bmech\b":  "Mechanical Engineering ME",
-    # Leadership names are appended at call time from the DB (see _leadership_terms)
-    # rather than hardcoded here, where they went stale as staff changed.
-    r"\bhods?\b":  "Head of Department HOD",
-    r"\bprincipal\b": "Principal",
-    r"\bexecutive director\b": "Executive Director Fr. Dr. Anto Chungath",
-    r"\bchairman\b": "Chairman Mar Pauly Kannookadan Bishop",
-    r"\bplacement\b": "placement training internship recruitment",
-    r"\badmission\b": "admission application eligibility intake",
-    r"\bformer\b": "former people previous past ex",
-}
-
-@lru_cache(maxsize=1)
-def _leadership_terms() -> str:
-    """Current leadership names, read from the faculty table.
-
-    Kept out of _QUERY_EXPANSIONS so the boost terms follow the data instead of a
-    hardcoded list that silently goes stale when staff change.
-    """
-    try:
-        conn = sqlite3.connect(FACULTY_DB)
-        rows = conn.execute(
-            "SELECT DISTINCT name FROM faculty "
-            "WHERE designation IS NOT NULL AND TRIM(designation) != '' "
-            "AND designation NOT LIKE '%Professor%'"
-        ).fetchall()
-        conn.close()
-    except Exception:
-        return ""
-    return " ".join(name for (name,) in rows if name)
 
 
-def expand_query(question: str) -> str:
-    """Expand terms for retrieval/routing; expects pre-normalized input."""
-    expanded = (question or "").strip()
-    if not expanded:
-        return ""
-    wants_leadership = bool(re.search(r"\bhods?\b|\bprincipal\b|\bdean\b|\bhead of department\b",
-                                      expanded, re.IGNORECASE))
-    for pattern, replacement in _QUERY_EXPANSIONS.items():
-        if re.search(pattern, expanded, re.IGNORECASE):
-            expanded = re.sub(pattern, replacement, expanded, flags=re.IGNORECASE)
-    if wants_leadership:
-        names = _leadership_terms()
-        if names:
-            expanded = f"{expanded} {names}"
-    return expanded
 
 
-_DEPARTMENT_CANONICAL_MAP = {
-    r"\bcse\b|computer\s+science": "Computer Science Engineering",
-    r"\bece\b|electronics\s+and\s+communication": "Electronics and Communication Engineering",
-    r"\beee\b|electrical\s+and\s+electronics": "Electrical and Electronics Engineering",
-    r"\bbme\b|biomedical": "Biomedical Engineering",
-    r"\bbt\b|biotechnology": "Biotechnology Engineering",
-    r"\bce\b|civil": "Civil Engineering",
-    r"\bmech\b|mechanical": "Mechanical Engineering",
-    r"\bash\b|applied\s+science": "Applied Science and Humanities",
-}
-
-# Current leadership roles, matched against the faculty.designation column.
-# Ordered: "assistant hod" must win before the plain "hod" pattern.
-_ROLE_CANONICAL_MAP = {
-    r"\bassistant\s+hods?\b|\bassistant\s+head\s+of\s+(?:the\s+)?department\b": "Assistant HOD",
-    r"\bhods?\b|\bhead\s+of\s+(?:the\s+)?department\b|\bdepartment\s+head\b": "Head of Department",
-    r"\bvice\s+principal\b": "Vice Principal",
-    r"\bprincipal\b": "Principal",
-    r"\bdean\b": "Dean",
-}
-
-_FORMER_ROLE_CANONICAL_MAP = {
-    "principal": "Principals",
-    "vice principal": "Vice Principals",
-    "manager": "Managers",
-    "director": "Directors",
-    "executive director": "Executive Directors",
-    "finance officer": "Finance Officers",
-    "media director": "Media Directors",
-    "advisor": "Advisors",
-    "chairman": "Chairmen",
-    "college chairperson": "College Chairpersons",
-}
 
 
-def _looks_single_person_query(q: str) -> bool:
-    question = (q or "").lower().strip()
-    if not question:
-        return False
-    if re.search(r"\b(list|show all|all\s+|who are|how many|count)\b", question):
-        return False
-    # A named role plus a department identifies one person ("ece hod"), even without
-    # a "who is" prefix. Without this the query reads as a department listing.
-    if re.search(r"\bhods?\b|\bhead\s+of\s+(?:the\s+)?department\b|\bprincipal\b|\bdean\b", question):
-        if not re.search(r"\b(former|past|previous|ex)\b", question):
-            return True
-
-    patterns = [
-        r"^who\s+is\s+",
-        r"^tell\s+me\s+about\s+",
-        r"^details\s+about\s+",
-        r"^information\s+about\s+",
-        r"^info\s+about\s+",
-    ]
-    return any(re.search(p, question) for p in patterns)
 
 
-def _extract_interest_from_query(q_lower: str) -> str | None:
-    patterns = [
-        r"(?:students?|people)\s+(?:interested\s+in|into|who\s+like|who\s+likes)\s+([a-z0-9\-\s]{2,40})",
-        r"(?:interested\s+in|into|likes?|like)\s+([a-z0-9\-\s]{2,40})\s+(?:students?|people)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, q_lower)
-        if not m:
-            continue
-        value = re.sub(r"\s+", " ", m.group(1)).strip(" ?.!,")
-        if value:
-            return value
-    return None
 
 
-def _is_safe_mapped_query(original: str, mapped: str) -> bool:
-    """Guardrail to avoid over-rewrites that change single-person intent to bulk intent."""
-    o = (original or "").strip().lower()
-    m = (mapped or "").strip().lower()
-    if not m:
-        return False
-
-    if _looks_single_person_query(o):
-        if re.search(r"\b(list|show all|all\s+|who are|how many|count)\b", m):
-            return False
-
-    return True
 
 
-def _deterministic_query_map(question: str) -> str:
-    """Map shorthand bulk queries to a canonical form before routing."""
-    q = (question or "").strip()
-    if not q:
-        return ""
 
-    q_lower = q.lower()
-    # Check for list-intent keywords: explicit list verbs AND "all" when near a department.
-    has_list_intent = bool(re.search(r"\b(list|show|give|members?|staff|faculty|professors?)\b", q_lower))
-    has_people_entity = bool(re.search(r"\b(faculty|faculties|professor|professors|teacher|teachers|staff|hods?|members?)\b", q_lower))
-    
-    # Also accept "all" as list intent if accompanied by department.
-    has_all_keyword = bool(re.search(r"\ball\b", q_lower))
 
-    detected_department = None
-    for pattern, canonical in _DEPARTMENT_CANONICAL_MAP.items():
-        if re.search(pattern, q_lower, re.IGNORECASE):
-            detected_department = canonical
-            break
 
-    # Role questions come first. "ece hod" and "who is the HOD of CSE" name ONE person,
-    # but "hod" also matches has_people_entity below, which would rewrite them into a
-    # whole-department listing and lose the intent entirely.
-    is_former_query = bool(re.search(r"\b(former|past|previous|ex)\b", q_lower))
-    detected_role = None
-    if not is_former_query:
-        for pattern, canonical in _ROLE_CANONICAL_MAP.items():
-            if re.search(pattern, q_lower, re.IGNORECASE):
-                detected_role = canonical
-                break
-
-    if detected_role:
-        if detected_department:
-            return f"who is the {detected_role} of {detected_department}"
-        # No department named: "list all HODs" stays bulk, "who is the principal" does not.
-        if re.search(r"\b(list|show|all|every|each)\b", q_lower):
-            return f"list all {detected_role}"
-        return f"who is the {detected_role}"
-
-    # Check for department + list-like pattern (e.g., "cse list all", "cse faculty", "ece members list").
-    # Match if: department + list verb, OR department + people entity, OR department + "all"
-    if detected_department and (has_list_intent or has_people_entity or has_all_keyword):
-        return f"list all faculty in {detected_department}"
-
-    # Former-role list intent normalization.
-    for role_singular, role_plural in _FORMER_ROLE_CANONICAL_MAP.items():
-        role_pattern = rf"\bformer\s+{re.escape(role_singular)}s?\b"
-        if re.search(role_pattern, q_lower):
-            return f"list all former {role_plural}"
-
-    # Student-interest list normalization.
-    interest = _extract_interest_from_query(q_lower)
-    if interest:
-        return f"list all students interested in {interest}"
-
-    return q
 
 
 def map_query_to_preset(question: str) -> str:
     """Canonicalize natural-language query shape for reliable SQL/RAG routing."""
+    ensure_engine()
     baseline = _deterministic_query_map(question)
     if not baseline:
         return ""
@@ -347,6 +201,7 @@ def canonicalize_query_pipeline(question: str) -> tuple[str, str, str]:
     we already hold an exact canonical query and both LLM calls are pure overhead, so
     skip them. Queries it does not recognise still get the full treatment.
     """
+    ensure_engine()
     raw = re.sub(r"\s+", " ", (question or "").strip())
     direct = _deterministic_query_map(raw)
     if direct and direct != raw:
@@ -368,62 +223,18 @@ def canonicalize_query_pipeline(question: str) -> tuple[str, str, str]:
 # ============ LOAD PRE-PROCESSED DATA ============
 # Expects data/processed/data_cleaned.jsonl produced by python preprocess_data.py
 
-CLEANED_FILE = "data/processed/data_cleaned.jsonl"
-RAW_FILE     = "data/raw/sahrdaya_rag.txt"
 
 # Keep raw text for direct faculty extraction
-raw_docs_text = ""
-if os.path.exists(RAW_FILE):
-    with open(RAW_FILE, "r", encoding="utf-8") as f:
-        raw_docs_text = f.read()
 
-if os.path.exists(CLEANED_FILE):
-    print(f"[*] Loading pre-processed chunks from {CLEANED_FILE}...")
-    docs = []
-    with open(CLEANED_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
-            docs.append(Document(
-                page_content=obj["content"],
-                metadata={
-                    "chunk_id": obj.get("parent_chunk", obj["id"]),
-                    "sub_chunk": obj["id"],
-                    "categories": ",".join(obj.get("categories", ["general"])),
-                },
-            ))
-    print(f"[*] Loaded {len(docs)} optimized chunks (already cleaned + re-chunked)")
-else:
-    print(f"[!] {CLEANED_FILE} not found — run:  python preprocess_data.py")
-    print("[*] Falling back to raw data/raw/sahrdaya_rag.txt loading...")
-    from langchain_community.document_loaders import DirectoryLoader, TextLoader
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    loader = DirectoryLoader(".", glob="*.txt", loader_cls=TextLoader, loader_kwargs={'encoding': 'utf-8'})
-    documents = loader.load()
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=150)
-    docs = text_splitter.split_documents(documents)
-    print(f"[*] Created {len(docs)} chunks (unoptimized — run preprocess_data.py for better results)")
 
 # Add a canonical attribution chunk so creator/credits questions always have a stable source.
-docs.append(
-    Document(
-        page_content=CREATOR_CANONICAL_LINE,
-        metadata={
-            "chunk_id": "canonical_creators",
-            "sub_chunk": "canonical_creators",
-            "categories": "about,developers,team,credits",
-            "source": "system_canonical",
-        },
-    )
-)
 
-DOC_BY_SUBCHUNK: dict[str, Document] = {}
-DOCS_BY_PARENT: dict[str, list[Document]] = defaultdict(list)
+DOC_BY_SUBCHUNK: "dict[str, object]" = {}
+DOCS_BY_PARENT: "dict[str, list]" = defaultdict(list)
 
 
 def _build_doc_lookups() -> None:
+    ensure_engine()
     DOC_BY_SUBCHUNK.clear()
     DOCS_BY_PARENT.clear()
     for doc in docs:
@@ -436,68 +247,24 @@ def _build_doc_lookups() -> None:
         DOCS_BY_PARENT[parent].append(doc)
 
 
-_build_doc_lookups()
 
 # ============ RETRIEVERS ============
 
 # Embeddings (local, no API key needed)
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# --- Index cache paths ---
-CACHE_DIR        = ".index_cache"
-FAISS_DIR        = os.path.join(CACHE_DIR, "faiss")
-BM25_CACHE       = os.path.join(CACHE_DIR, "bm25.pkl")
-BM25_LARGE_CACHE = os.path.join(CACHE_DIR, "bm25_large.pkl")
-HASH_FILE        = os.path.join(CACHE_DIR, "data_hash.txt")
-TRACKING_FILE    = "data/raw/sahrdaya_tracking.json"
 GRAPH_CACHE      = os.path.join(CACHE_DIR, "content_graph.json")
-GRAPH_HASH_FILE  = os.path.join(CACHE_DIR, "content_graph_hash.txt")
-GRAPH_SCHEMA_V1  = "content_graph_v1"
-
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-def _data_hash() -> str:
-    """Hash of data/processed/data_cleaned.jsonl to detect when data changes."""
-    h = hashlib.md5()
-    with open(CLEANED_FILE, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    # Also hash retrieval seeds so cache refreshes when canonical/system chunks change.
-    h.update(CREATOR_CANONICAL_LINE.encode("utf-8"))
-    h.update(b"creator_retrieval_v1")
-    return h.hexdigest()
-
-def _cache_is_valid() -> bool:
-    """Check if cached indexes exist and match current data."""
-    if not all(os.path.exists(p) for p in [FAISS_DIR, BM25_CACHE, BM25_LARGE_CACHE, HASH_FILE]):
-        return False
-    with open(HASH_FILE, "r") as f:
-        return f.read().strip() == _data_hash()
-
-def _save_hash():
-    with open(HASH_FILE, "w") as f:
-        f.write(_data_hash())
 
 
-def _file_hash(path: str) -> str:
-    if not os.path.exists(path):
-        return "missing"
-    h = hashlib.md5()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
-def _graph_data_hash() -> str:
-    h = hashlib.md5()
-    h.update(_file_hash(CLEANED_FILE).encode("utf-8"))
-    h.update(_file_hash(TRACKING_FILE).encode("utf-8"))
-    h.update(GRAPH_SCHEMA_V1.encode("utf-8"))
-    return h.hexdigest()
+
+
+
+
 
 
 def _graph_cache_is_valid() -> bool:
+    ensure_engine()
     if nx is None or json_graph is None:
         return False
     if not all(os.path.exists(p) for p in [GRAPH_CACHE, GRAPH_HASH_FILE]):
@@ -506,34 +273,14 @@ def _graph_cache_is_valid() -> bool:
         return f.read().strip() == _graph_data_hash()
 
 
-def _save_graph_hash() -> None:
-    with open(GRAPH_HASH_FILE, "w", encoding="utf-8") as f:
-        f.write(_graph_data_hash())
 
 
-def _extract_urls_from_text(text: str) -> list[str]:
-    urls = []
-    seen = set()
-    for raw in URL_PATTERN.findall(text or ""):
-        u = raw.rstrip(".,;:)")
-        if u and u not in seen:
-            seen.add(u)
-            urls.append(u)
-    return urls
 
 
-def _load_tracking_pages() -> dict:
-    if not os.path.exists(TRACKING_FILE):
-        return {}
-    try:
-        with open(TRACKING_FILE, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-        return obj.get("urls", {}) if isinstance(obj, dict) else {}
-    except Exception:
-        return {}
 
 
 def _build_content_graph():
+    ensure_engine()
     if nx is None:
         return None
 
@@ -612,6 +359,7 @@ def _build_content_graph():
 
 
 def _load_or_build_content_graph():
+    ensure_engine()
     if nx is None or json_graph is None:
         print("[*] GraphRAG disabled (networkx not available)")
         return None
@@ -639,78 +387,16 @@ def _load_or_build_content_graph():
     print(f"[*] Content graph ready ({graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges)")
     return graph
 
-# Custom preprocessing: lowercase + split so that token matching is case-insensitive
-def _bm25_preprocess(text: str) -> list[str]:
-    return text.lower().split()
 
-_t0 = time.time()
 
-if _cache_is_valid():
-    # --- Load from cache ---
-    print("[*] Loading cached FAISS index...")
-    vectorstore = FAISS.load_local(FAISS_DIR, embeddings, allow_dangerous_deserialization=True)
-    print(f"[*] FAISS vector index loaded from cache")
-
-    print("[*] Loading cached BM25 indexes...")
-    with open(BM25_CACHE, "rb") as f:
-        bm25_retriever = pickle.load(f)
-    with open(BM25_LARGE_CACHE, "rb") as f:
-        bm25_retriever_large = pickle.load(f)
-    print(f"[*] BM25 lexical indexes loaded from cache")
-else:
-    # --- Build from scratch and save ---
-    print("[*] Building FAISS vector index (first run or data changed)...")
-    vectorstore = FAISS.from_documents(docs, embeddings)
-    vectorstore.save_local(FAISS_DIR)
-    print(f"[*] FAISS vector index built & cached")
-
-    print("[*] Building BM25 lexical indexes...")
-    bm25_retriever = BM25Retriever.from_documents(docs, k=8, preprocess_func=_bm25_preprocess)
-    bm25_retriever_large = BM25Retriever.from_documents(docs, k=50, preprocess_func=_bm25_preprocess)
-    with open(BM25_CACHE, "wb") as f:
-        pickle.dump(bm25_retriever, f)
-    with open(BM25_LARGE_CACHE, "wb") as f:
-        pickle.dump(bm25_retriever_large, f)
-    print(f"[*] BM25 lexical indexes built & cached")
-
-    _save_hash()
-
-_t1 = time.time()
-print(f"[*] Indexes ready in {_t1 - _t0:.1f}s")
-
-CONTENT_GRAPH = _load_or_build_content_graph()
 
 # Vector retrievers with MMR for diversity
-vector_retriever = vectorstore.as_retriever(
-    search_type="mmr",
-    search_kwargs={"k": 8, "fetch_k": 25, "lambda_mult": 0.7},
-)
-vector_retriever_large = vectorstore.as_retriever(
-    search_type="mmr",
-    search_kwargs={"k": 30, "fetch_k": 60, "lambda_mult": 0.5},
-)
-
-# Hybrid retrievers: BM25 (keyword) + Vector (semantic), weighted
-# BM25 gets higher weight (0.6) — better for exact names, roles, keywords
-# Vector gets 0.4 — covers semantic similarity and paraphrased queries
-retriever = EnsembleRetriever(
-    retrievers=[bm25_retriever, vector_retriever],
-    weights=[0.6, 0.4],
-)
-retriever_large = EnsembleRetriever(
-    retrievers=[bm25_retriever_large, vector_retriever_large],
-    weights=[0.6, 0.4],
-)
-print(f"[*] Hybrid retrievers ready (BM25 + Vector)")
 
 # ============ CROSS-ENCODER RERANKER ============
 # After hybrid retrieval returns candidates, the cross-encoder scores each
 # (query, document) pair jointly — much more accurate than bi-encoder similarity.
 # Model: ms-marco-MiniLM-L-6-v2 (~22 MB, runs locally, no API key needed)
 
-print("[*] Loading cross-encoder reranker...")
-_reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-print("[*] Cross-encoder reranker ready")
 
 
 def rerank_docs(query: str, docs: list, top_k: int) -> list:
@@ -719,6 +405,7 @@ def rerank_docs(query: str, docs: list, top_k: int) -> list:
     Scores each (query, doc) pair jointly and returns the top_k documents
     sorted by cross-encoder score (highest first).
     """
+    ensure_engine()
     if not docs:
         return docs
     # Score each (query, document) pair
@@ -732,78 +419,14 @@ def rerank_docs(query: str, docs: list, top_k: int) -> list:
 # ------------------ GROQ API KEY (from environment variable) ------------------
 # Support both a single key and a comma-separated key pool.
 # For bootstrap objects in this module, pick the first available key.
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-if not GROQ_API_KEY:
-    _pool_raw = os.environ.get("GROQ_API_KEYS", "").strip()
-    if _pool_raw:
-        _pool = [k.strip() for k in _pool_raw.split(",") if k.strip()]
-        if _pool:
-            GROQ_API_KEY = _pool[0]
 
-if not GROQ_API_KEY:
-    print("\n" + "="*70)
-    print("ERROR: Groq API Key is missing!")
-    print("="*70)
-    print("\nPlease get your API key from:")
-    print("🔗 https://console.groq.com/keys")
-    print("\nThen set it as an environment variable:")
-    print('   Windows (PowerShell): $env:GROQ_API_KEY = "gsk_..."')
-    print('   Or set GROQ_API_KEYS="gsk_1,gsk_2,..." in .env')
-    print('   Linux/macOS:          export GROQ_API_KEY="gsk_..."')
-    print("="*70 + "\n")
-    exit(1)
-
-llm = ChatGroq(
-    groq_api_key=GROQ_API_KEY,
-    model_name="openai/gpt-oss-120b"
-)
-
-_QUERY_CORRECT_PROMPT = ChatPromptTemplate.from_template("""You are a query typo corrector for a college chatbot.
-
-Task:
-- Correct spelling mistakes and minor grammar in the user query.
-- Preserve original meaning and intent exactly.
-- Preserve entities/acronyms like CSE, ECE, BME, HOD, SCET.
-- Do not add new facts.
-- Do not answer the query.
-
-Return only the corrected query text, nothing else.
-
-User query: {question}
-""")
-
-_query_correct_chain = _QUERY_CORRECT_PROMPT | llm | StrOutputParser()
-
-_QUERY_MAP_PROMPT = ChatPromptTemplate.from_template("""You rewrite college chatbot questions into canonical routing-friendly wording.
-
-Goal:
-- Keep the original meaning intact.
-- Rewrite shorthand/fragment queries into a clear full query.
-- Prefer canonical forms for list intents so routing is stable.
-
-Canonical examples:
-- "cse members list" -> "list all faculty in Computer Science Engineering"
-- "ece faculty" -> "list all faculty in Electronics and Communication Engineering"
-- "students into chess" -> "list all students interested in chess"
-- "former principals" -> "list all former Principals"
-
-Rules:
-- Do not answer the question.
-- Do not add facts.
-- Never convert a single-person question (e.g., "who is X") into a list/count query.
-- Keep entity scope unchanged (faculty/student/former-people must stay the same).
-- Return only one rewritten query line.
-
-User query: {question}
-""")
-
-_query_map_chain = _QUERY_MAP_PROMPT | llm | StrOutputParser()
 
 # Max characters for context (to stay under token limit ~6000 tokens = ~24000 chars)
 MAX_CONTEXT_CHARS = 22000
 
 # Helper function to format documents with size limit
 def format_docs(docs, max_chars=MAX_CONTEXT_CHARS):
+    ensure_engine()
     result = []
     total_chars = 0
     for doc in docs:
@@ -817,38 +440,15 @@ def format_docs(docs, max_chars=MAX_CONTEXT_CHARS):
         total_chars += len(content) + 10
     return "\n\n---\n\n".join(result)
 
-# Check if query is a "list all" type query
-def is_list_query(question):
-    q_lower = question.lower()
-    list_indicators = ["list all", "list the", "show all", "show me all", "give me all",
-                       "all faculty", "all faculties", "all professors", "all teachers",
-                       "all hod", "all members", "all staff", "everyone in", "who are the",
-                       "faculties from", "faculty from", "faculty of", "faculties of",
-                       "how many faculty", "how many professors", "tell me all",
-                       "members list", "member list", "list members", "list faculty"]
-    return any(ind in q_lower for ind in list_indicators)
 
 
-def is_creator_query(question: str) -> bool:
-    """Return True for creator/credits/developer identity questions."""
-    q = (question or "").strip().lower()
-    if not q:
-        return False
-    return bool(CREATOR_QUERY_PATTERN.search(q))
 
 
-def expand_creator_query(question: str) -> str:
-    """Append creator-specific retrieval terms for identity/credits questions."""
-    if not is_creator_query(question):
-        return question
-    return (
-        f"{question} created by developers development team website team credits "
-        "Aaron Thomas Shayen Thomas Mishal Shanavas Mathew Geejo"
-    )
 
 
 def rerank_docs_with_creator_boost(query: str, docs: list, top_k: int, creator_intent: bool) -> list:
     """Rerank with cross-encoder and apply a light lexical boost for creator intents."""
+    ensure_engine()
     if not docs:
         return docs
 
@@ -873,135 +473,18 @@ def rerank_docs_with_creator_boost(query: str, docs: list, top_k: int, creator_i
     return [doc for _, doc in scored[:top_k]]
 
 # Prompt template
-prompt = ChatPromptTemplate.from_template("""You are the official AI assistant for Sahrdaya College of Engineering & Technology (SCET), Kodakara, Thrissur, Kerala.
-
-CONVERSATION HISTORY:
-{chat_history}
-
-CONTEXT:
-{context}
-
-QUESTION: {question}
-
-INSTRUCTIONS:
-- Answer strictly from the context. Include names, roles, dates, numbers when available.
-- For people: provide Name, Designation, Department, Email if present.
-- For LIST queries: show ALL matching items in a numbered list or table.
-- Resolve pronouns using conversation history.
-
-LINKS — follow this order exactly:
-- If asked for a document, PDF, regulation, form, handbook, placements report, syllabus, or
-  statistics file: search the CONTEXT for URLs and print every relevant one.
-- Print raw URLs in plain text (starting with http:// or https://). Never hide a link behind
-  a markdown label, and never invent a URL.
-- Do NOT say "no direct link was found" while any URL for the requested document appears in
-  the context. Only say that when the context genuinely contains none.
-- The bare homepage https://sahrdaya.ac.in/ is a last resort for when the context has no
-  specific link at all. It is not an answer to a request for a particular document, so never
-  offer it in place of a link that exists in the context.
-
-SCOPE:
-- Answer only questions about Sahrdaya College. For anything else, say it is outside what you
-  cover and point to https://sahrdaya.ac.in/.
-- This applies to requests to PERFORM A TASK as much as to questions of fact. Do not write
-  poems, stories, essays, songs, jokes, code, or translations, and do not do general homework,
-  even if asked to make them about the college. Decline briefly and redirect to college topics.
-- Never pad an answer with unrelated facts from the context to satisfy such a request.
-
-- If the answer is not in context, say so and suggest visiting: https://sahrdaya.ac.in/.
-- Be concise but complete.""")
 
 # ============ FACULTY SQL DATABASE ============
 
-FACULTY_DB = "data/sql/college.db"
-DB_HASH_FILE = os.path.join(CACHE_DIR, "db_source_hash.txt")
 
 
-def _db_source_hash() -> str:
-    """Fingerprint of the inputs the SQL DB is built from.
-
-    FAISS/BM25 already rebuild when their source changes (_data_hash); without the
-    same check here a re-scrape left college.db silently stale.
-    """
-    digest = hashlib.md5()
-    for path in (RAW_FILE, "data/students.csv"):
-        try:
-            with open(path, "rb") as fh:
-                digest.update(fh.read())
-        except OSError:
-            digest.update(b"<missing>")
-        digest.update(b"|")
-    return digest.hexdigest()
 
 
-def _db_hash_is_current() -> bool:
-    try:
-        with open(DB_HASH_FILE, "r", encoding="utf-8") as fh:
-            return fh.read().strip() == _db_source_hash()
-    except OSError:
-        return False
 
 
-def _write_db_hash() -> None:
-    try:
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        with open(DB_HASH_FILE, "w", encoding="utf-8") as fh:
-            fh.write(_db_source_hash())
-    except OSError:
-        pass
 
 
 # Build DB on first import if it doesn't exist
-if not os.path.exists(FACULTY_DB):
-    print("[*] data/sql/college.db not found — building from data/raw/sahrdaya_rag.txt...")
-    from sql_db_setup import build_db
-    build_db(FACULTY_DB)
-    _write_db_hash()
-elif not _db_hash_is_current():
-    print("[*] Source data changed since data/sql/college.db was built — rebuilding...")
-    from sql_db_setup import build_db
-    build_db(FACULTY_DB)
-    _write_db_hash()
-    _conn = sqlite3.connect(FACULTY_DB)
-    _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
-    _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
-    _conn.close()
-    print(f"[*] Faculty SQL database rebuilt ({_cnt} faculty + {_fcnt} former people)")
-else:
-    _conn = sqlite3.connect(FACULTY_DB)
-    _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
-    # Ensure former_people table exists (may need rebuild if DB predates this table)
-    _has_former = _conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='former_people'"
-    ).fetchone()[0]
-    if not _has_former:
-        _conn.close()
-        print("[*] former_people table missing — rebuilding data/sql/college.db...")
-        os.remove(FACULTY_DB)
-        from sql_db_setup import build_db
-        build_db(FACULTY_DB)
-        _write_db_hash()
-        _conn = sqlite3.connect(FACULTY_DB)
-        _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
-        _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
-        _conn.close()
-        print(f"[*] Faculty SQL database rebuilt ({_cnt} faculty + {_fcnt} former people)")
-    else:
-        _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
-        _conn.close()
-        print(f"[*] Faculty SQL database loaded ({_cnt} faculty + {_fcnt} former people)")
-
-# Ensure student tables/data exist in the same shared DB file.
-_student_stats = ensure_student_data(FACULTY_DB)
-_conn = sqlite3.connect(FACULTY_DB)
-_scnt = _conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
-_icnt = _conn.execute("SELECT COUNT(*) FROM interests").fetchone()[0]
-_sicnt = _conn.execute("SELECT COUNT(*) FROM student_interests").fetchone()[0]
-_conn.close()
-if _student_stats.get("csv_found"):
-    print(f"[*] Student data loaded ({_scnt} students, {_icnt} canonical interests, {_sicnt} links)")
-else:
-    print("[*] data/students.csv not found — student tables ready (0 rows loaded)")
 
 # ── Schema description for LLM ──────────────────────────────────────────────────
 
@@ -1104,233 +587,26 @@ IMPORTANT NOTES:
 
 # ── SQL classification + generation prompt ───────────────────────────────────────
 
-_SQL_CLASSIFY_PROMPT = ChatPromptTemplate.from_template(
-"""You are a query classifier for a college database.
-
-Given a user question, decide if it should be answered by querying the SQL database.
-
-The database contains faculty/staff info, former people history, and student profile+interest data.
-
-IMPORTANT — Use SQL ONLY for BULK/LIST queries that need to retrieve or filter MULTIPLE faculty members.
-
-Generate SQL for these types of queries:
-- "list all CSE faculty" / "faculty of ECE" / "show all professors" → SELECT from faculty table
-- "CSE faculty with PhD" / "faculty with more than 5 publications" → filtered lists from faculty
-- "how many faculty have PhD" / "count of ECE professors" → aggregate counts from faculty
-- "faculty pursuing PhD in CSE" → filtered lists from faculty
-- "list all former Principals" / "previous Managers" / "past Directors" → SELECT from former_people table
-- "who were the former Vice Principals" / "all former people" → SELECT from former_people table
-- "list all students" / "students in CSE" / "students graduating in 2027" → SELECT from students table
-- "students interested in chess" / "students interested in machine learning" → JOIN students + student_interests + interests
-- ANY query asking for a LIST, ALL, COUNT, or FILTERED SET of faculty, former people, OR students
-
-Respond NOT_SQL for these (let the RAG chatbot handle them naturally):
-- "who is the HOD of CSE" / "who is the principal" → asking about ONE specific person
-- "tell me about Dr. Raju G" / "who is minnuja" → individual person queries
-- Admissions, courses, events, placements, campus, fees, student life, college history
-- ANY question about a single specific person, role, or position
-
-Key distinction: "who is the HOD of CSE" = NOT_SQL (single person). "list all HODs" = SQL (multiple people).
-Key distinction: "former Principals" = SQL (from former_people table). "current Principal" = NOT_SQL (single person).
-Key distinction: "students interested in chess" = SQL (bulk/filter set). "tell me about student X" = NOT_SQL.
-
-Rules:
-- ONLY generate SELECT statements. Never INSERT/UPDATE/DELETE.
-- Return ONLY the raw SQL query or NOT_SQL. No explanation, no markdown, no backticks.
-
-DATABASE SCHEMA:
-{schema}
-
-CONVERSATION HISTORY:
-{chat_history}
-
-USER QUESTION: {question}
-
-Respond with ONLY the SQL query or NOT_SQL:""")
-
-_sql_classify_chain = _SQL_CLASSIFY_PROMPT | llm | StrOutputParser()
 
 # Max chars of chat history to send to the SQL classifier (~1500 chars ≈ 400 tokens)
 _SQL_HISTORY_LIMIT = 1500
 
 
-def _normalize_name_for_match(text: str) -> str:
-    """Normalize person names for tolerant exact matching."""
-    value = (text or "").strip().lower()
-    value = re.sub(r"[^a-z0-9\s]", " ", value)
-    value = re.sub(r"\s+", " ", value)
-    return value.strip()
 
 
-def _extract_person_name_candidate(question: str) -> str | None:
-    """Extract potential person name from single-person query phrasing."""
-    q = (question or "").strip()
-    patterns = [
-        r"^\s*who\s+is\s+(.+?)\s*\??\s*$",
-        r"^\s*who\s+is\s+student\s+(.+?)\s*\??\s*$",
-        r"^\s*tell\s+me\s+about\s+(.+?)\s*\??\s*$",
-        r"^\s*details\s+about\s+(.+?)\s*\??\s*$",
-        r"^\s*info(?:rmation)?\s+about\s+(.+?)\s*\??\s*$",
-    ]
-    for pat in patterns:
-        m = re.match(pat, q, flags=re.IGNORECASE)
-        if m:
-            cand = _normalize_name_for_match(m.group(1))
-            return cand if cand else None
-    return None
 
 
-def _student_single_lookup_sql(question: str) -> str | None:
-    """Return a direct SQL query for single-student lookup if name matches."""
-    candidate = _extract_person_name_candidate(question)
-    if not candidate:
-        return None
-
-    try:
-        conn = sqlite3.connect(FACULTY_DB)
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM students")
-        rows = cur.fetchall()
-        conn.close()
-    except Exception:
-        return None
-
-    matched_name = None
-    for (name,) in rows:
-        normalized = _normalize_name_for_match(name)
-        words = normalized.split()
-        # Match if candidate is exact match OR matches as a word in the name
-        if candidate == normalized or candidate in words:
-            matched_name = name
-            break
-
-    if not matched_name:
-        return None
-
-    # Keep this deterministic and safe: exact match on resolved canonical name.
-    escaped = matched_name.replace("'", "''")
-    return (
-        "SELECT name, year_of_graduation, department, bio, photo_url, instagram_username, "
-        "github_url, projects_links, linkedin_url, personal_website "
-        f"FROM students WHERE name = '{escaped}' ORDER BY name"
-    )
 
 
-_ROLE_LOOKUP_COLUMNS = (
-    "SELECT name, designation, department, email, experience_years, research_areas "
-    "FROM faculty"
-)
 
 
-def _role_lookup_sql(question: str) -> str | None:
-    """Deterministic SQL for current-leadership questions.
-
-    "who is the HOD of CSE" used to reach the LLM classifier, which wrote a
-    department-wide SELECT and returned all 35 CSE staff. The designation column is
-    populated from the faculty API, so build the query directly and filter on it.
-
-    Expects the canonical form produced by _deterministic_query_map(), and also
-    tolerates the raw phrasing.
-    """
-    q = (question or "").strip().lower()
-    if not q or re.search(r"\b(former|past|previous|ex)\b", q):
-        return None
-
-    role = None
-    for pattern, canonical in _ROLE_CANONICAL_MAP.items():
-        if re.search(pattern, q, re.IGNORECASE):
-            role = canonical
-            break
-    if role is None or role == "Vice Principal":
-        # Vice Principal is a former-people role, not a faculty designation.
-        return None
-
-    department = None
-    for pattern, canonical in _DEPARTMENT_CANONICAL_MAP.items():
-        if re.search(pattern, q, re.IGNORECASE):
-            department = canonical
-            break
-
-    escaped_role = role.replace("'", "''")
-    where = [f"designation LIKE '%{escaped_role}%'"]
-    if department:
-        escaped_dept = department.replace("'", "''")
-        where.append(f"department LIKE '%{escaped_dept}%'")
-
-    return f"{_ROLE_LOOKUP_COLUMNS} WHERE {' AND '.join(where)} ORDER BY department, name"
 
 
-def _is_bulk_entity_query(question: str) -> bool:
-    """Gate SQL usage to explicit BULK faculty/former-people/student intents only.
-
-    This prevents broad department questions (e.g., "what are things in CSE")
-    from being routed to SQL.
-    """
-    q = question.lower().strip()
-
-    # Must look like a bulk/list/filter/count intent.
-    bulk_intent_patterns = [
-        r"\blist\b",
-        r"\bshow\b",
-        r"\bgive\b",
-        r"\ball\b",
-        r"\bhow many\b",
-        r"\bcount\b",
-        r"\bwho are\b",
-        r"\bwho likes\b",
-        r"\bwho like\b",
-        r"\blikes?\b",
-        r"\bfaculty with\b",
-        r"\bfaculties with\b",
-        r"\bstudents?\s+with\b",
-        r"\bstudents?\s+interested\s+in\b",
-        r"\binterested\s+in\b",
-        r"\bpeople\s+with\b",
-        r"\bpeople\s+interested\s+in\b",
-        r"\bwho\s+interested\s+in\b",
-        r"\bgraduating\b",
-        r"\bgraduates\b",
-        r"\bformer\b",
-        r"\bpast\b",
-        r"\bprevious\b",
-    ]
-    has_bulk_intent = any(re.search(p, q) for p in bulk_intent_patterns)
-    if not has_bulk_intent:
-        return False
-
-    # Must explicitly target faculty/staff OR former people concepts.
-    target_entity_patterns = [
-        r"\bfaculty\b",
-        r"\bfaculties\b",
-        r"\bprofessor\b",
-        r"\bprofessors\b",
-        r"\bteacher\b",
-        r"\bteachers\b",
-        r"\bstaff\b",
-        r"\bhods\b",
-        r"\bstudent\b",
-        r"\bstudents\b",
-        r"\bpeople\b",
-        r"\bperson\b",
-        r"\binterest\b",
-        r"\binterests\b",
-        r"\bgraduation\b",
-        r"\bgraduating\b",
-        r"\bformer\b",
-        r"\bpast\b",
-        r"\bprevious\b",
-        r"\bformer people\b",
-        r"\bformer principals\b",
-        r"\bformer vice principals\b",
-        r"\bformer managers\b",
-        r"\bformer directors\b",
-    ]
-    has_target_entity = any(re.search(p, q) for p in target_entity_patterns)
-    return has_target_entity
 
 
 def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str | None:
     """Ask the LLM if this question needs SQL. Returns SQL string or None."""
+    ensure_engine()
     normalized_question, mapped_question, expanded_question = canonicalize_query_pipeline(question)
 
     # Fast path: explicit single-person student lookups should not depend on RAG.
@@ -1368,253 +644,26 @@ def classify_and_generate_sql(question: str, chat_history_text: str = "") -> str
     return result
 
 
-def _get_faculty_columns() -> set[str]:
-    """Return the set of column names in the faculty table."""
-    try:
-        conn = sqlite3.connect(FACULTY_DB)
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(faculty)")
-        cols = {row[1] for row in cur.fetchall()}
-        conn.close()
-        return cols
-    except Exception:
-        return set()
 
 
-def _get_former_columns() -> set[str]:
-    """Return the set of column names in the former_people table."""
-    try:
-        conn = sqlite3.connect(FACULTY_DB)
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(former_people)")
-        cols = {row[1] for row in cur.fetchall()}
-        conn.close()
-        return cols
-    except Exception:
-        return set()
 
 
-def _get_students_columns() -> set[str]:
-    """Return the set of column names in the students table."""
-    try:
-        conn = sqlite3.connect(FACULTY_DB)
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(students)")
-        cols = {row[1] for row in cur.fetchall()}
-        conn.close()
-        return cols
-    except Exception:
-        return set()
 
 
-def _get_interests_columns() -> set[str]:
-    """Return the set of column names in the interests table."""
-    try:
-        conn = sqlite3.connect(FACULTY_DB)
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(interests)")
-        cols = {row[1] for row in cur.fetchall()}
-        conn.close()
-        return cols
-    except Exception:
-        return set()
 
 
-def _get_student_interests_columns() -> set[str]:
-    """Return the set of column names in the student_interests table."""
-    try:
-        conn = sqlite3.connect(FACULTY_DB)
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(student_interests)")
-        cols = {row[1] for row in cur.fetchall()}
-        conn.close()
-        return cols
-    except Exception:
-        return set()
 
 
-def validate_faculty_sql(sql: str) -> bool:
-    """Check that all columns referenced in the SQL actually exist in the target table(s).
-    Returns True if valid, False if any referenced column is not in the schema."""
-    # Determine which table(s) are queried
-    sql_upper = sql.upper()
-    valid_cols = set()
-    if 'FORMER_PEOPLE' in sql_upper:
-        valid_cols |= _get_former_columns()
-    if 'STUDENTS' in sql_upper:
-        valid_cols |= _get_students_columns()
-    if 'INTERESTS' in sql_upper:
-        valid_cols |= _get_interests_columns()
-    if 'STUDENT_INTERESTS' in sql_upper:
-        valid_cols |= _get_student_interests_columns()
-    if 'FACULTY' in sql_upper:
-        valid_cols |= _get_faculty_columns()
-    if not any(t in sql_upper for t in ['FACULTY', 'FORMER_PEOPLE', 'STUDENTS', 'INTERESTS', 'STUDENT_INTERESTS']):
-        valid_cols |= _get_faculty_columns()
-    if not valid_cols:
-        return False
-
-    # Remove string literals so their content doesn't confuse the parser
-    cleaned = re.sub(r"'[^']*'", "''", sql)
-
-    # Tokenise: grab word-like identifiers (skip SQL keywords, functions, etc.)
-    sql_keywords = {
-        'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN',
-        'IS', 'NULL', 'ORDER', 'BY', 'GROUP', 'HAVING', 'AS', 'ON', 'JOIN',
-        'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'DISTINCT', 'ALL', 'ASC',
-        'DESC', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'EXISTS',
-        'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'CAST', 'COUNT', 'SUM', 'AVG',
-        'MIN', 'MAX', 'UPPER', 'LOWER', 'LENGTH', 'SUBSTR', 'TRIM', 'REPLACE',
-        'COALESCE', 'IFNULL', 'NULLIF', 'TYPEOF', 'TOTAL', 'ABS', 'ROUND',
-        'INTEGER', 'TEXT', 'REAL', 'BLOB', 'PRIMARY', 'KEY', 'AUTOINCREMENT',
-        'TABLE', 'FACULTY', 'FORMER_PEOPLE', 'STUDENTS', 'INTERESTS', 'STUDENT_INTERESTS', 'TRUE', 'FALSE',
-    }
-    tokens = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', cleaned)
-    for tok in tokens:
-        if tok.upper() in sql_keywords:
-            continue
-        # If it looks like a column name (lowercase with underscores) and isn't valid
-        if tok.lower() == tok and '_' in tok and tok not in valid_cols:
-            return False
-    return True
 
 
-def execute_faculty_sql(sql: str) -> tuple[list[str], list[tuple]] | None:
-    """Execute a read-only SQL query on data/sql/college.db. Returns (column_names, rows) or None on error."""
-    # Safety: only allow SELECT
-    if not sql.strip().upper().startswith("SELECT"):
-        return None
-    try:
-        conn = sqlite3.connect(FACULTY_DB)
-        cur = conn.cursor()
-        cur.execute(sql)
-        columns = [desc[0] for desc in cur.description] if cur.description else []
-        rows = cur.fetchall()
-        conn.close()
-        return columns, rows
-    except Exception as e:
-        print(f"  [SQL Error] {e}")
-        return None
 
 
-def _drop_empty_columns(columns: list[str], rows: list[tuple]) -> tuple[list[str], list[tuple]]:
-    """Remove columns where every row is NULL/blank/zero — they only add width."""
-    keep = []
-    for i, name in enumerate(columns):
-        for row in rows:
-            value = row[i]
-            if value is None:
-                continue
-            if isinstance(value, (int, float)) and value == 0:
-                continue
-            if str(value).strip():
-                keep.append(i)
-                break
-    if not keep or len(keep) == len(columns):
-        return columns, rows
-    return [columns[i] for i in keep], [tuple(row[i] for i in keep) for row in rows]
 
 
-# The columns worth showing when listing people; anything else is detail for a single
-# profile, not for a roster.
-_PEOPLE_SUMMARY_COLUMNS = (
-    "name", "designation", "role", "department", "email",
-    "experience_years", "start_year", "end_year", "year_of_graduation",
-)
 
 
-def _limit_people_columns(columns: list[str], rows: list[tuple]) -> tuple[list[str], list[tuple]]:
-    """For multi-row people results, keep a readable summary column set."""
-    lowered = [c.lower() for c in columns]
-    if "name" not in lowered:
-        return columns, rows
-    keep = [i for i, c in enumerate(lowered) if c in _PEOPLE_SUMMARY_COLUMNS]
-    if not keep or len(keep) == len(columns):
-        return columns, rows
-    return [columns[i] for i in keep], [tuple(row[i] for i in keep) for row in rows]
 
 
-def format_sql_results(columns: list[str], rows: list[tuple], question: str = "") -> str:
-    """Format SQL query results as a markdown table."""
-    if not rows:
-        return "No matching records found."
-
-    # Single aggregate result (e.g. COUNT(*))
-    if len(columns) == 1 and len(rows) == 1 and isinstance(rows[0][0], (int, float)):
-        col = columns[0].replace("_", " ").title()
-        return f"**{col}: {rows[0][0]}**"
-
-    # Student single-profile output is easier to read as labeled fields.
-    student_profile_cols = {
-        "name",
-        "year_of_graduation",
-        "department",
-        "bio",
-        "photo_url",
-        "instagram_username",
-        "github_url",
-        "projects_links",
-        "linkedin_url",
-        "personal_website",
-    }
-    if len(rows) == 1 and student_profile_cols.issuperset({c.lower() for c in columns}):
-        label_map = {
-            "name": "Name",
-            "year_of_graduation": "Graduation Year",
-            "department": "Department",
-            "bio": "Bio",
-            "photo_url": "Photo",
-            "instagram_username": "Instagram",
-            "github_url": "GitHub",
-            "projects_links": "Projects",
-            "linkedin_url": "LinkedIn",
-            "personal_website": "Website",
-        }
-        pairs = []
-        row = rows[0]
-        for i, value in enumerate(row):
-            if value is None or str(value).strip() == "":
-                continue
-            key = columns[i].lower()
-            label = label_map.get(key, columns[i].replace("_", " ").title())
-            pairs.append(f"- **{label}:** {value}")
-        return "\n".join(pairs)
-
-    # Table output.
-    # `SELECT *` on faculty yields 18 columns, most of them empty for most people —
-    # "list all faculty" rendered a 21 KB wall of blank cells. Narrow the table to the
-    # columns that actually carry information before formatting.
-    columns, rows = _drop_empty_columns(columns, rows)
-    if len(rows) > 1:
-        columns, rows = _limit_people_columns(columns, rows)
-
-    # Clean column names for display
-    display_cols = []
-    for c in columns:
-        c = c.replace("_", " ").title()
-        c = c.replace("Has Phd", "PhD").replace("Phd Pursuing", "PhD Pursuing")
-        c = c.replace("Experience Years", "Experience (Yrs)")
-        c = c.replace("Start Year", "From").replace("End Year", "To")
-        display_cols.append(c)
-
-    header = "| # | " + " | ".join(display_cols) + " |"
-    separator = "|---" * (len(display_cols) + 1) + "|"
-
-    lines = [header, separator]
-    for i, row in enumerate(rows, 1):
-        cells = []
-        for j, val in enumerate(row):
-            col_lower = columns[j].lower()
-            if col_lower in ('has_phd', 'phd_pursuing'):
-                cells.append('Yes' if val else 'No')
-            elif val is None:
-                cells.append('')
-            else:
-                cells.append(str(val))
-        lines.append(f"| {i} | " + " | ".join(cells) + " |")
-
-    lines.append(f"\n**Total: {len(rows)} result(s)**")
-    return "\n".join(lines)
 
 
 # ============ END FACULTY SQL ============
@@ -1624,19 +673,12 @@ def format_sql_results(columns: list[str], rows: list[tuple], question: str = ""
 # EnsembleRetriever combines both — no manual keyword maps needed.
 
 
-def _tokenize_graph_query(question: str) -> list[str]:
-    q = (question or "").lower()
-    tokens = re.findall(r"[a-z0-9]{2,}", q)
-    return [t for t in tokens if t not in GRAPH_STOPWORDS]
 
 
-def _graph_link_intent(question: str) -> bool:
-    q = (question or "").lower()
-    keys = ["link", "url", "download", "pdf", "document", "source"]
-    return any(k in q for k in keys)
 
 
 def _is_graph_query(question: str) -> bool:
+    ensure_engine()
     q = normalize_user_query(question)
     if not q:
         return False
@@ -1646,6 +688,7 @@ def _is_graph_query(question: str) -> bool:
 
 
 def _seed_graph_chunks_from_query(tokens: list[str]) -> set[str]:
+    ensure_engine()
     if not CONTENT_GRAPH or not tokens:
         return set()
 
@@ -1680,6 +723,7 @@ def _seed_graph_chunks_from_query(tokens: list[str]) -> set[str]:
 
 
 def _score_graph_chunk(question_tokens: list[str], doc: Document, seed_chunks: set[str]) -> int:
+    ensure_engine()
     md = doc.metadata or {}
     sub = str(md.get("sub_chunk", md.get("chunk_id", ""))).strip()
     text = (doc.page_content or "").lower()
@@ -1704,6 +748,7 @@ def _score_graph_chunk(question_tokens: list[str], doc: Document, seed_chunks: s
 
 def retrieve_with_metadata_graph(question: str) -> tuple[str, list[str], int]:
     """Return graph-informed context for relationship/structure style questions."""
+    ensure_engine()
     if not CONTENT_GRAPH:
         return "", [], 0
 
@@ -1738,12 +783,14 @@ def retrieve_with_metadata_graph(question: str) -> tuple[str, list[str], int]:
 
 def retrieve_context(inputs):
     """Route retrieval (GraphRAG or hybrid) and return context string."""
+    ensure_engine()
     context, _, _, _ = retrieve_with_metadata(inputs["question"], return_mode=True)
     return context
 
 
 def retrieve_with_metadata(question: str, return_mode: bool = False):
     """Route retrieval and return context/chunks/docs with optional route mode."""
+    ensure_engine()
     if _is_graph_query(question):
         graph_context, graph_chunks, graph_count = retrieve_with_metadata_graph(question)
         if graph_count > 0:
@@ -1775,55 +822,11 @@ def retrieve_with_metadata(question: str, return_mode: bool = False):
     return context_str, chunk_ids, len(reranked)
 
 
-def _extract_urls_from_docs(doc_list, limit=8):
-    """Extract unique URLs from document content and metadata values."""
-    out = []
-    seen = set()
-
-    def _is_static_asset(u):
-        low = u.lower().split("?")[0]
-        return low.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".ico", ".css", ".js"))
-
-    def _priority(u):
-        low = u.lower()
-        if ".pdf" in low or "alt=media" in low:
-            return 0
-        if any(ext in low for ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]):
-            return 1
-        return 2
-
-    candidates = []
-
-    def _add_url(url):
-        u = (url or "").rstrip(".,;:)")
-        if u and u not in seen and not _is_static_asset(u):
-            seen.add(u)
-            candidates.append(u)
-
-    for doc in doc_list:
-        for match in URL_PATTERN.findall(doc.page_content or ""):
-            _add_url(match)
-
-        md = doc.metadata or {}
-        for _, value in md.items():
-            if isinstance(value, str):
-                for match in URL_PATTERN.findall(value):
-                    _add_url(match)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, str):
-                        for match in URL_PATTERN.findall(item):
-                            _add_url(match)
-
-    for u in sorted(candidates, key=_priority):
-        out.append(u)
-        if len(out) >= limit:
-            break
-    return out
 
 
 def retrieve_supporting_urls(question, limit=6):
     """Retrieve likely relevant docs for link-heavy queries and return direct URLs."""
+    ensure_engine()
 
     question = normalize_user_query(question)
     q = (question or "").lower()
@@ -1902,31 +905,451 @@ def retrieve_supporting_urls(question, limit=6):
     return _extract_urls_from_docs(reranked, limit=limit)
 
 # Chain
-qa_chain = (
-    {
-        "context": RunnableLambda(retrieve_context),
-        "question": itemgetter("question"),
-        "chat_history": itemgetter("chat_history")
-    } 
-    | prompt 
-    | llm 
-    | StrOutputParser()
-)
-
-# Chain that accepts pre-built context (for when we retrieve separately)
-qa_chain_with_context = (
-    {
-        "context": itemgetter("context"),
-        "question": itemgetter("question"),
-        "chat_history": itemgetter("chat_history")
-    }
-    | prompt
-    | llm
-    | StrOutputParser()
-)
 
 # Store for conversation history.
 # Owned by the CLI (main.py) only -- it is a plain unlocked module global shared by
 # every importer, so it has no per-user scoping. API code must NOT touch this; the
 # FastAPI layer keeps per-session history in api/services/session_store.SessionStore.
+
+# ============ LAZY ENGINE ============
+# Building the indexes, downloading the two sentence-transformer models and opening the
+# Groq client used to happen at import time. That cost ~20s warm / ~136s cold on every
+# import, wrote to college.db as a side effect, and called exit(1) when no API key was
+# set — which killed unrelated entrypoints that merely imported this module.
+#
+# All of it now runs on first use. Everything the rest of the codebase reads
+# (prompt, llm, retriever, CONTENT_GRAPH, qa_chain, ...) is resolved through the
+# module-level __getattr__ below, so callers are unchanged.
+
+_ENGINE_LOCK = threading.Lock()
+_ENGINE_READY = False
+_INIT_THREAD = None
+
+# Names produced by _initialize(); requesting any of them triggers the build.
+_LAZY_NAMES = frozenset({
+    "raw_docs_text", "docs", "embeddings", "vectorstore", "vectorstore_large",
+    "bm25_retriever", "bm25_retriever_large", "vector_retriever",
+    "vector_retriever_large", "retriever", "retriever_large", "_reranker",
+    "CONTENT_GRAPH", "GROQ_API_KEY", "llm", "prompt", "qa_chain",
+    "qa_chain_with_context", "_QUERY_CORRECT_PROMPT", "_QUERY_MAP_PROMPT",
+    "_SQL_CLASSIFY_PROMPT", "_sql_classify_chain", "_query_correct_chain",
+    "_query_map_chain", "HuggingFaceEmbeddings", "FAISS", "BM25Retriever",
+    "EnsembleRetriever", "ChatGroq", "RunnableLambda", "StrOutputParser",
+    "ChatPromptTemplate", "Document", "CrossEncoder", "nx", "json_graph",
+})
+
+
+def engine_ready() -> bool:
+    """True once the models, indexes and LLM client are loaded."""
+    return _ENGINE_READY
+
+
+def ensure_engine() -> None:
+    """Build the retrieval engine if it has not been built yet. Idempotent.
+
+    Functions in this module reference the lazy globals by plain name, and module
+    __getattr__ only covers attribute access from outside, so each heavy entry point
+    calls this first. _initialize() itself calls some of those functions, hence the
+    re-entrancy guard: the building thread passes straight through, everyone else
+    waits on the lock.
+    """
+    global _ENGINE_READY, _INIT_THREAD
+    if _ENGINE_READY:
+        return
+    if _INIT_THREAD == threading.get_ident():
+        return
+    with _ENGINE_LOCK:
+        if _ENGINE_READY:
+            return
+        _INIT_THREAD = threading.get_ident()
+        try:
+            _initialize()
+            _ENGINE_READY = True
+        finally:
+            _INIT_THREAD = None
+
+
+def __getattr__(name):
+    # PEP 562: only called for names not already in module globals, so this costs
+    # nothing once _initialize() has assigned them.
+    if name in _LAZY_NAMES:
+        ensure_engine()
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                "%r was not produced by rag_setup._initialize()" % name
+            ) from None
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
+
+
+def _initialize() -> None:
+    """Load models, build/restore indexes, open the LLM client and the DB."""
+    global BM25Retriever, CONTENT_GRAPH, ChatGroq, ChatPromptTemplate, CrossEncoder, Document
+    global EnsembleRetriever, FAISS, GROQ_API_KEY, HuggingFaceEmbeddings, RunnableLambda, StrOutputParser
+    global _QUERY_CORRECT_PROMPT, _QUERY_MAP_PROMPT, _SQL_CLASSIFY_PROMPT, _cnt, _conn, _fcnt
+    global _has_former, _icnt, _pool_raw, _query_correct_chain, _query_map_chain, _reranker
+    global _scnt, _sicnt, _sql_classify_chain, _student_stats, _t0, _t1
+    global bm25_retriever, bm25_retriever_large, docs, documents, embeddings, json_graph
+    global llm, loader, nx, prompt, qa_chain, qa_chain_with_context
+    global raw_docs_text, retriever, retriever_large, text_splitter, vector_retriever, vector_retriever_large
+    global vectorstore
+
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_community.vectorstores import FAISS
+    from langchain_community.retrievers import BM25Retriever
+    from langchain_classic.retrievers.ensemble import EnsembleRetriever
+    from langchain_groq import ChatGroq
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.documents import Document
+    from sentence_transformers import CrossEncoder
+
+    try:
+        import networkx as nx
+        from networkx.readwrite import json_graph
+    except Exception:
+        nx = None
+        json_graph = None
+
+    raw_docs_text = ""
+    if os.path.exists(RAW_FILE):
+        with open(RAW_FILE, "r", encoding="utf-8") as f:
+            raw_docs_text = f.read()
+
+    if os.path.exists(CLEANED_FILE):
+        print(f"[*] Loading pre-processed chunks from {CLEANED_FILE}...")
+        docs = []
+        with open(CLEANED_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                docs.append(Document(
+                    page_content=obj["content"],
+                    metadata={
+                        "chunk_id": obj.get("parent_chunk", obj["id"]),
+                        "sub_chunk": obj["id"],
+                        "categories": ",".join(obj.get("categories", ["general"])),
+                    },
+                ))
+        print(f"[*] Loaded {len(docs)} optimized chunks (already cleaned + re-chunked)")
+    else:
+        print(f"[!] {CLEANED_FILE} not found — run:  python preprocess_data.py")
+        print("[*] Falling back to raw data/raw/sahrdaya_rag.txt loading...")
+        from langchain_community.document_loaders import DirectoryLoader, TextLoader
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        loader = DirectoryLoader(".", glob="*.txt", loader_cls=TextLoader, loader_kwargs={'encoding': 'utf-8'})
+        documents = loader.load()
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=150)
+        docs = text_splitter.split_documents(documents)
+        print(f"[*] Created {len(docs)} chunks (unoptimized — run preprocess_data.py for better results)")
+
+    docs.append(
+        Document(
+            page_content=CREATOR_CANONICAL_LINE,
+            metadata={
+                "chunk_id": "canonical_creators",
+                "sub_chunk": "canonical_creators",
+                "categories": "about,developers,team,credits",
+                "source": "system_canonical",
+            },
+        )
+    )
+
+    _build_doc_lookups()
+
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    _t0 = time.time()
+
+    if _cache_is_valid():
+        # --- Load from cache ---
+        print("[*] Loading cached FAISS index...")
+        vectorstore = FAISS.load_local(FAISS_DIR, embeddings, allow_dangerous_deserialization=True)
+        print(f"[*] FAISS vector index loaded from cache")
+
+        print("[*] Loading cached BM25 indexes...")
+        with open(BM25_CACHE, "rb") as f:
+            bm25_retriever = pickle.load(f)
+        with open(BM25_LARGE_CACHE, "rb") as f:
+            bm25_retriever_large = pickle.load(f)
+        print(f"[*] BM25 lexical indexes loaded from cache")
+    else:
+        # --- Build from scratch and save ---
+        print("[*] Building FAISS vector index (first run or data changed)...")
+        vectorstore = FAISS.from_documents(docs, embeddings)
+        vectorstore.save_local(FAISS_DIR)
+        print(f"[*] FAISS vector index built & cached")
+
+        print("[*] Building BM25 lexical indexes...")
+        bm25_retriever = BM25Retriever.from_documents(docs, k=8, preprocess_func=_bm25_preprocess)
+        bm25_retriever_large = BM25Retriever.from_documents(docs, k=50, preprocess_func=_bm25_preprocess)
+        with open(BM25_CACHE, "wb") as f:
+            pickle.dump(bm25_retriever, f)
+        with open(BM25_LARGE_CACHE, "wb") as f:
+            pickle.dump(bm25_retriever_large, f)
+        print(f"[*] BM25 lexical indexes built & cached")
+
+        _save_hash()
+
+    _t1 = time.time()
+    print(f"[*] Indexes ready in {_t1 - _t0:.1f}s")
+
+    CONTENT_GRAPH = _load_or_build_content_graph()
+
+    vector_retriever = vectorstore.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": 8, "fetch_k": 25, "lambda_mult": 0.7},
+    )
+    vector_retriever_large = vectorstore.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": 30, "fetch_k": 60, "lambda_mult": 0.5},
+    )
+
+    # Hybrid retrievers: BM25 (keyword) + Vector (semantic), weighted
+    # BM25 gets higher weight (0.6) — better for exact names, roles, keywords
+    # Vector gets 0.4 — covers semantic similarity and paraphrased queries
+    retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, vector_retriever],
+        weights=[0.6, 0.4],
+    )
+    retriever_large = EnsembleRetriever(
+        retrievers=[bm25_retriever_large, vector_retriever_large],
+        weights=[0.6, 0.4],
+    )
+    print(f"[*] Hybrid retrievers ready (BM25 + Vector)")
+
+    print("[*] Loading cross-encoder reranker...")
+    _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    print("[*] Cross-encoder reranker ready")
+
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+    if not GROQ_API_KEY:
+        _pool_raw = os.environ.get("GROQ_API_KEYS", "").strip()
+        if _pool_raw:
+            _pool = [k.strip() for k in _pool_raw.split(",") if k.strip()]
+            if _pool:
+                GROQ_API_KEY = _pool[0]
+
+    if not GROQ_API_KEY:
+        # Raise rather than exit(1): this runs on first use, and a library that kills
+        # the interpreter takes down every caller that merely imported the module.
+        raise RuntimeError(
+            "Groq API key is missing.\n"
+            "  Get one at https://console.groq.com/keys, then set it:\n"
+            '    PowerShell : $env:GROQ_API_KEY = "gsk_..."\n'
+            '    bash       : export GROQ_API_KEY="gsk_..."\n'
+            '    or put GROQ_API_KEY=gsk_... (or GROQ_API_KEYS=gsk_1,gsk_2) in .env'
+        )
+
+    llm = ChatGroq(
+        groq_api_key=GROQ_API_KEY,
+        model_name="openai/gpt-oss-120b"
+    )
+
+    _QUERY_CORRECT_PROMPT = ChatPromptTemplate.from_template("""You are a query typo corrector for a college chatbot.
+
+    Task:
+    - Correct spelling mistakes and minor grammar in the user query.
+    - Preserve original meaning and intent exactly.
+    - Preserve entities/acronyms like CSE, ECE, BME, HOD, SCET.
+    - Do not add new facts.
+    - Do not answer the query.
+
+    Return only the corrected query text, nothing else.
+
+    User query: {question}
+    """)
+
+    _query_correct_chain = _QUERY_CORRECT_PROMPT | llm | StrOutputParser()
+
+    _QUERY_MAP_PROMPT = ChatPromptTemplate.from_template("""You rewrite college chatbot questions into canonical routing-friendly wording.
+
+    Goal:
+    - Keep the original meaning intact.
+    - Rewrite shorthand/fragment queries into a clear full query.
+    - Prefer canonical forms for list intents so routing is stable.
+
+    Canonical examples:
+    - "cse members list" -> "list all faculty in Computer Science Engineering"
+    - "ece faculty" -> "list all faculty in Electronics and Communication Engineering"
+    - "students into chess" -> "list all students interested in chess"
+    - "former principals" -> "list all former Principals"
+
+    Rules:
+    - Do not answer the question.
+    - Do not add facts.
+    - Never convert a single-person question (e.g., "who is X") into a list/count query.
+    - Keep entity scope unchanged (faculty/student/former-people must stay the same).
+    - Return only one rewritten query line.
+
+    User query: {question}
+    """)
+
+    _query_map_chain = _QUERY_MAP_PROMPT | llm | StrOutputParser()
+
+    prompt = ChatPromptTemplate.from_template("""You are the official AI assistant for Sahrdaya College of Engineering & Technology (SCET), Kodakara, Thrissur, Kerala.
+
+    CONVERSATION HISTORY:
+    {chat_history}
+
+    CONTEXT:
+    {context}
+
+    QUESTION: {question}
+
+    INSTRUCTIONS:
+    - Answer strictly from the context. Include names, roles, dates, numbers when available.
+    - For people: provide Name, Designation, Department, Email if present.
+    - For LIST queries: show ALL matching items in a numbered list or table.
+    - Resolve pronouns using conversation history.
+
+    LINKS — follow this order exactly:
+    - If asked for a document, PDF, regulation, form, handbook, placements report, syllabus, or
+      statistics file: search the CONTEXT for URLs and print every relevant one.
+    - Print raw URLs in plain text (starting with http:// or https://). Never hide a link behind
+      a markdown label, and never invent a URL.
+    - Do NOT say "no direct link was found" while any URL for the requested document appears in
+      the context. Only say that when the context genuinely contains none.
+    - The bare homepage https://sahrdaya.ac.in/ is a last resort for when the context has no
+      specific link at all. It is not an answer to a request for a particular document, so never
+      offer it in place of a link that exists in the context.
+
+    SCOPE:
+    - Answer only questions about Sahrdaya College. For anything else, say it is outside what you
+      cover and point to https://sahrdaya.ac.in/.
+    - This applies to requests to PERFORM A TASK as much as to questions of fact. Do not write
+      poems, stories, essays, songs, jokes, code, or translations, and do not do general homework,
+      even if asked to make them about the college. Decline briefly and redirect to college topics.
+    - Never pad an answer with unrelated facts from the context to satisfy such a request.
+
+    - If the answer is not in context, say so and suggest visiting: https://sahrdaya.ac.in/.
+    - Be concise but complete.""")
+
+    if not os.path.exists(FACULTY_DB):
+        print("[*] data/sql/college.db not found — building from data/raw/sahrdaya_rag.txt...")
+        from sql_db_setup import build_db
+        build_db(FACULTY_DB)
+        _write_db_hash()
+    elif not _db_hash_is_current():
+        print("[*] Source data changed since data/sql/college.db was built — rebuilding...")
+        from sql_db_setup import build_db
+        build_db(FACULTY_DB)
+        _write_db_hash()
+        _conn = sqlite3.connect(FACULTY_DB)
+        _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
+        _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
+        _conn.close()
+        print(f"[*] Faculty SQL database rebuilt ({_cnt} faculty + {_fcnt} former people)")
+    else:
+        _conn = sqlite3.connect(FACULTY_DB)
+        _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
+        # Ensure former_people table exists (may need rebuild if DB predates this table)
+        _has_former = _conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='former_people'"
+        ).fetchone()[0]
+        if not _has_former:
+            _conn.close()
+            print("[*] former_people table missing — rebuilding data/sql/college.db...")
+            os.remove(FACULTY_DB)
+            from sql_db_setup import build_db
+            build_db(FACULTY_DB)
+            _write_db_hash()
+            _conn = sqlite3.connect(FACULTY_DB)
+            _cnt = _conn.execute("SELECT COUNT(*) FROM faculty").fetchone()[0]
+            _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
+            _conn.close()
+            print(f"[*] Faculty SQL database rebuilt ({_cnt} faculty + {_fcnt} former people)")
+        else:
+            _fcnt = _conn.execute("SELECT COUNT(*) FROM former_people").fetchone()[0]
+            _conn.close()
+            print(f"[*] Faculty SQL database loaded ({_cnt} faculty + {_fcnt} former people)")
+
+    # Ensure student tables/data exist in the same shared DB file.
+    _student_stats = ensure_student_data(FACULTY_DB)
+    _conn = sqlite3.connect(FACULTY_DB)
+    _scnt = _conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+    _icnt = _conn.execute("SELECT COUNT(*) FROM interests").fetchone()[0]
+    _sicnt = _conn.execute("SELECT COUNT(*) FROM student_interests").fetchone()[0]
+    _conn.close()
+    if _student_stats.get("csv_found"):
+        print(f"[*] Student data loaded ({_scnt} students, {_icnt} canonical interests, {_sicnt} links)")
+    else:
+        print("[*] data/students.csv not found — student tables ready (0 rows loaded)")
+
+    _SQL_CLASSIFY_PROMPT = ChatPromptTemplate.from_template(
+    """You are a query classifier for a college database.
+
+    Given a user question, decide if it should be answered by querying the SQL database.
+
+    The database contains faculty/staff info, former people history, and student profile+interest data.
+
+    IMPORTANT — Use SQL ONLY for BULK/LIST queries that need to retrieve or filter MULTIPLE faculty members.
+
+    Generate SQL for these types of queries:
+    - "list all CSE faculty" / "faculty of ECE" / "show all professors" → SELECT from faculty table
+    - "CSE faculty with PhD" / "faculty with more than 5 publications" → filtered lists from faculty
+    - "how many faculty have PhD" / "count of ECE professors" → aggregate counts from faculty
+    - "faculty pursuing PhD in CSE" → filtered lists from faculty
+    - "list all former Principals" / "previous Managers" / "past Directors" → SELECT from former_people table
+    - "who were the former Vice Principals" / "all former people" → SELECT from former_people table
+    - "list all students" / "students in CSE" / "students graduating in 2027" → SELECT from students table
+    - "students interested in chess" / "students interested in machine learning" → JOIN students + student_interests + interests
+    - ANY query asking for a LIST, ALL, COUNT, or FILTERED SET of faculty, former people, OR students
+
+    Respond NOT_SQL for these (let the RAG chatbot handle them naturally):
+    - "who is the HOD of CSE" / "who is the principal" → asking about ONE specific person
+    - "tell me about Dr. Raju G" / "who is minnuja" → individual person queries
+    - Admissions, courses, events, placements, campus, fees, student life, college history
+    - ANY question about a single specific person, role, or position
+
+    Key distinction: "who is the HOD of CSE" = NOT_SQL (single person). "list all HODs" = SQL (multiple people).
+    Key distinction: "former Principals" = SQL (from former_people table). "current Principal" = NOT_SQL (single person).
+    Key distinction: "students interested in chess" = SQL (bulk/filter set). "tell me about student X" = NOT_SQL.
+
+    Rules:
+    - ONLY generate SELECT statements. Never INSERT/UPDATE/DELETE.
+    - Return ONLY the raw SQL query or NOT_SQL. No explanation, no markdown, no backticks.
+
+    DATABASE SCHEMA:
+    {schema}
+
+    CONVERSATION HISTORY:
+    {chat_history}
+
+    USER QUESTION: {question}
+
+    Respond with ONLY the SQL query or NOT_SQL:""")
+
+    _sql_classify_chain = _SQL_CLASSIFY_PROMPT | llm | StrOutputParser()
+
+    qa_chain = (
+        {
+            "context": RunnableLambda(retrieve_context),
+            "question": itemgetter("question"),
+            "chat_history": itemgetter("chat_history")
+        } 
+        | prompt 
+        | llm 
+        | StrOutputParser()
+    )
+
+    # Chain that accepts pre-built context (for when we retrieve separately)
+    qa_chain_with_context = (
+        {
+            "context": itemgetter("context"),
+            "question": itemgetter("question"),
+            "chat_history": itemgetter("chat_history")
+        }
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+
 chat_history = []

@@ -1,0 +1,264 @@
+{
+  "documents": [
+    {
+      "name": "projects/college-website-27cf1/databases/(default)/documents/faculty/ambilyfrancis@sahrdaya.ac.in",
+      "fields": {
+        "education": {
+          "arrayValue": {
+            "values": [
+              {
+                "mapValue": {
+                  "fields": {
+                    "field": {
+                      "stringValue": "Electronics and Communication"
+                    },
+                    "institution": {
+                      "stringValue": "Karunya Institute of Technology and Sciences"
+                    },
+                    "degree": {
+                      "stringValue": "PhD"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "name": {
+          "stringValue": "Dr. Ambily Francis"
+        },
+        "joinedDate": {
+          "stringValue": "2013-01-14"
+        },
+        "mailId": {
+          "stringValue": "ambilyfrancis@sahrdaya.ac.in"
+        },
+        "position": {
+          "stringValue": "Head of Department"
+        },
+        "department": {
+          "stringValue": "Electronics and Communication Engineering"
+        }
+      }
+    },
+    {
+      "name": "projects/college-website-27cf1/databases/(default)/documents/faculty/principal@sahrdaya.ac.in",
+      "fields": {
+        "name": {
+          "stringValue": "Dr. Ramkumar S"
+        },
+        "position": {
+          "stringValue": "Principal"
+        },
+        "yearsOfExperience": {
+          "stringValue": "25 Years"
+        },
+        "department": {
+          "stringValue": "Electronics and Communication Engineering"
+        },
+        "mailId": {
+          "stringValue": "principal@sahrdaya.ac.in"
+        },
+        "areaOfInterest": {
+          "stringValue": "Semiconductor devices and thin-film technologies, solar cell applications, engineering education and academic leadership, research and innovation, institutional development, and industry\u2013academia collaboration."
+        }
+      }
+    },
+    {
+      "name": "projects/college-website-27cf1/databases/(default)/documents/faculty/adarsh@sahrdaya.ac.in",
+      "fields": {
+        "patents": {
+          "arrayValue": {
+            "values": [
+              {
+                "mapValue": {
+                  "fields": {
+                    "title": {
+                      "stringValue": "IoT Enabled  Smart Prosthetics With Adaptive Feedback Control"
+                    },
+                    "patentNo": {
+                      "stringValue": "202521090470 "
+                    },
+                    "inventors": {
+                      "stringValue": "Rajesh Pashikanti,Roshan Chitranshi,Shibu KR, Dr Manpreet Kaur,Adarsh SR,Dr S Nagarajan,Dr A Yashota,Karthika G"
+                    },
+                    "status": {
+                      "stringValue": "Published"
+                    },
+                    "academicYear": {
+                      "stringValue": "2025-26"
+                    },
+                    "date": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "education": {
+          "arrayValue": {
+            "values": [
+              {
+                "mapValue": {
+                  "fields": {
+                    "degree": {
+                      "stringValue": "M.Tech"
+                    },
+                    "field": {
+                      "stringValue": "Control & Instrumentation"
+                    },
+                    "institution": {
+                      "stringValue": "Amrita School of Engineering,Coimbatore"
+                    }
+                  }
+                }
+              },
+              {
+                "mapValue": {
+                  "fields": {
+                    "degree": {
+                      "stringValue": "B.Tech"
+                    },
+                    "field": {
+                      "stringValue": "Electrical & Electronics Engineering"
+                    },
+                    "institution": {
+                      "stringValue": "College of Engineering ,Chengannur"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "name": {
+          "stringValue": "ADARSH SR"
+        },
+        "awards": {
+          "arrayValue": {
+            "values": [
+              {
+                "mapValue": {
+                  "fields": {
+                    "organization": {
+                      "stringValue": "NPTEL-SWAYAM"
+                    },
+                    "title": {
+                      "stringValue": "MENTORSHIP CERTIFICATE -Moral Thinking: An Introduction to Values and Ethics"
+                    },
+                    "academicYear": {
+                      "stringValue": "2024-25"
+                    },
+                    "date": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "position": {
+          "stringValue": "Assistant Professor"
+        },
+        "department": {
+          "stringValue": "Electrical and Electronics Engineering"
+        },
+        "memberships": {
+          "arrayValue": {
+            "values": [
+              {
+                "mapValue": {
+                  "fields": {
+                    "name": {
+                      "stringValue": "ISTE Life Membership"
+                    },
+                    "academicYear": {
+                      "stringValue": "2024-25"
+                    },
+                    "date": {
+                      "stringValue": "2025-03-18"
+                    }
+                  }
+                }
+              },
+              {
+                "mapValue": {
+                  "fields": {
+                    "name": {
+                      "stringValue": "IEEE"
+                    },
+                    "academicYear": {
+                      "stringValue": "2021-22"
+                    },
+                    "date": {
+                      "stringValue": "2021-12-08"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "mailId": {
+          "stringValue": "adarsh@sahrdaya.ac.in"
+        },
+        "booksChaptersPublished": {
+          "arrayValue": {
+            "values": [
+              {
+                "mapValue": {
+                  "fields": {
+                    "title": {
+                      "stringValue": "Model Identificationand PositionControl ofQuanser Qube Servo DC Motor"
+                    },
+                    "author": {
+                      "stringValue": " Adarsh S. R. and S. Selva Kumar"
+                    },
+                    "academicYear": {
+                      "stringValue": "2021-22"
+                    },
+                    "date": {
+                      "stringValue": ""
+                    },
+                    "isbnId": {
+                      "stringValue": "9789811590191"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "areaOfInterest": {
+          "stringValue": "Control Engineering,Robotics"
+        },
+        "joinedDate": {
+          "stringValue": "2020-08-17"
+        }
+      }
+    },
+    {
+      "name": "projects/college-website-27cf1/databases/(default)/documents/faculty/leon@sahrdaya.ac.in",
+      "fields": {
+        "areaOfInterest": {
+          "stringValue": "Bioprocess Engg., Naomaterials, Food Technology, Ayurveda Validation"
+        },
+        "joinedDate": {
+          "stringValue": "2004-01-01"
+        },
+        "yearsOfExperience": {
+          "stringValue": "23"
+        },
+        "mailId": {
+          "stringValue": "leon@sahrdaya.ac.in"
+        },
+        "name": {
+          "stringValue": "Dr Leon Ittiachen"
+        }
+      }
+    }
+  ]
+}
